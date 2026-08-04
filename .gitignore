@@ -1,0 +1,31 @@
+# prod
+dist/
+
+# deps
+node_modules/
+.wrangler
+
+# env — never commit WIF keys, FCM credentials, or the parent session secret
+.env
+.env.production
+.dev.vars
+.dev.vars*
+!.dev.vars.example
+!.env.example
+*.pem
+
+# logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# editors
+.idea
+.vscode
+.DS_Store
+.claude/**
+!.claude/commands/
+!.claude/commands/**
+
+*.cpuprofile
