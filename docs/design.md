@@ -1,9 +1,18 @@
 # tuni-noti — Parent Notification Service
 
-**Status:** design r2, not yet implemented. r2 incorporates the 2026-08-04 design review (two-reviewer
-debate + a line-by-line fact-check of every robo-worker citation): asymmetric parent tokens become a
-prerequisite, the consumer is rebuilt around idempotent single-batch effects, `identity.child.deleted`
-rides the durable deletion pipeline, and the §3.5 producer citations are corrected against the real code.
+**Status:** design r3, not yet implemented. r2 incorporated the 2026-08-04 design review (two-reviewer
+debate + a line-by-line fact-check of every robo-worker citation): asymmetric parent tokens became a
+prerequisite, the consumer was rebuilt around idempotent single-batch effects, `identity.child.deleted`
+rides the durable deletion pipeline, and the §3.5 producer citations were corrected against the real code.
+
+**r3 closes what r2 left open.** r2 applied "batch, never loop per entity" to the *queue consumer*
+(§4.4) and stated the accounting rule in §5 — but the *flush cron* (§4.5) was still specified per child,
+which breaks D1's 1,000-query invocation budget at ~200 due children and then starves its own tail. r3
+makes the flush **set-based**; derives the coalescing `dedupe_key` from **arrival order rather than
+ledger order** (unordered queues made the old key unstable); splits the weekly aggregate's **stars and
+missions into separate numbers**; anchors the reporting week to **Vietnam local time**; and replaces
+four asserted-but-unmechanized behaviours (weekly digest staging, quiet-hours catch-up, cap under a
+multi-child parent, sweeper timing) with defined ones.
 
 ---
 
@@ -102,7 +111,10 @@ with the walking skeleton (§6).
 ### 1.5 Assumptions (flagged, not blocking)
 
 - `identity.parent.deleted` is defined in the contract but has **no producer**: robo-worker has no
-  account deletion (`docs/parent-app-api.md:111`). Child deletion does exist and is wired (§3.6).
+  account deletion (`docs/parent-app-api.md:111`). Child deletion *does* exist and is wired (§3.6) —
+  note that the same line also says "no child deletion", which is **stale**: the durable pipeline in
+  `src/services/course/runtime/deletion.ts` (stages `requested → … → receipt`) landed after that doc was
+  written. For deletion behaviour, cite the code, not the API doc.
 - Both services are on Workers Paid (DOs / Workflows / Vectorize require it), so Queues is included:
   1 M operations/month free, then $0.40/M. Cost is not a factor.
 
@@ -238,6 +250,14 @@ The Sunday rider emits one `reporting.week.closed` per child that was active in 
 
 **No report table, no report API, no stored artifact.**
 
+**The week is Vietnam-local, not UTC.** The cron fires `0 3 * * SUN` UTC = 10:00 Sunday in
+`Asia/Ho_Chi_Minh`, but `weekStart` / `weekEnd` — and the `>= ?1` cutoffs below — are computed as
+**local** midnight boundaries (`weekStart` = the Monday 00:00 +07 seven days back), then converted to
+the UTC instants the columns store. Deriving them from the cron's UTC instant instead would report a
+week running Sunday-morning to Sunday-morning, which matches nothing a Vietnamese parent recognises and
+makes `eventId = {childId}:{weekStart}` drift if the cron ever moves. Everything user-facing in this
+service is local-time (§4.5 quiet hours, `caps.local_date`); this is the same rule.
+
 **Aggregate with `GROUP BY`, never per child.** D1 allows **1,000 queries per Worker invocation**, so
 two queries per child dies at ~500 children. The rider issues a fixed number of queries regardless of
 population:
@@ -247,9 +267,20 @@ population:
 SELECT child_id, COUNT(*) AS lessons FROM child_lesson_log
  WHERE completed_at >= ?1 GROUP BY child_id;
 
-SELECT child_id, COUNT(*) AS stars FROM child_challenge_awards
+-- stars and missions are DIFFERENT numbers: the PK is
+-- (child_id, course_id, challenge_id), so one row is one mission achieved,
+-- while `stars` is that row's award (1..100). COUNT(*) is not a star count.
+SELECT child_id,
+       COUNT(*)   AS missions_achieved,
+       SUM(stars) AS stars
+  FROM child_challenge_awards
  WHERE awarded_at >= ?1 GROUP BY child_id;
 ```
+
+`awarded_at` is nullable and NULL for `source IN ('restore','backfill')` rows
+(`migrations/0016_challenge_awards.sql`), so `WHERE awarded_at >= ?1` excludes them. That is deliberate:
+a restored or backfilled award is not something that happened to the child this week, and reporting it
+would tell a parent their child earned stars during a week they may not have used the robot at all.
 
 Join the two result sets in memory and fan out **onto `NOTI_WEEKLY_QUEUE`** (§5.3). The weekly cron runs
 on a ≥ 1 h interval so it gets the **15-minute CPU** budget rather than 30 s — ample, but page the
@@ -389,10 +420,10 @@ that supplies most of the boring infrastructure pre-debugged. Match robo-worker'
 | `children` | `child_id` PK, `parent_id`, `name`, `identity_updated_at`, `deleted_at` — **mirror, not source of truth**; `deleted_at` is a terminal tombstone, never cleared (§4.8) |
 | `push_tokens` | `token` PK (**globally unique** — a handset that switches accounts is atomically reassigned, §4.7), `device_id` UNIQUE (opaque handle for the API), `parent_id`, `platform`, `last_seen_at`, `disabled_at` |
 | `preferences` | `parent_id` PK, `progress_enabled`, `weekly_enabled`, `quiet_start`, `quiet_end`, `daily_cap` |
-| `coalesce_events` | `event_id` PK, `child_id`, `parent_id`, `kind`, `payload_json`, `arrived_at` — **append-only membership**, one row per pending event (§4.5); index `(child_id, arrived_at)` |
-| `notifications` | `id` (UUIDv7), `parent_id`, `child_id`, `kind`, `title`, `body`, `data_json`, `scheduled_for`, `state ∈ scheduled\|enqueued\|done\|deferred_quiet\|suppressed_cap\|suppressed_dark\|canceled`, `dedupe_key` UNIQUE |
+| `coalesce_events` | `event_id` PK, `window_key`, `scope ∈ child\|parent`, `child_id`, `parent_id`, `kind`, `payload_json`, `arrived_at` — **append-only membership**, one row per pending event (§4.5). `window_key` is `child_id` for learning events and `parent_id` for weekly ones, so one grouped query serves both scopes. `arrived_at` is **consumer-assigned and monotone**, and is what the flush orders and keys by — never ledger order (§4.5 step 2). Index `(window_key, arrived_at)` |
+| `notifications` | `id` (UUIDv7), `parent_id`, `child_id`, `kind`, `title`, `body`, `data_json`, `scheduled_for`, `enqueued_at`, `state ∈ scheduled\|enqueued\|done\|deferred_quiet\|suppressed_cap\|suppressed_dark\|canceled`, `dedupe_key` UNIQUE |
 | `deliveries` | `notification_id` + `token` composite PK, `state ∈ pending\|accepted\|failed\|canceled`, `attempts`, `fcm_message_name` — per-token, because a parent has many devices and partial failure must not resend to the ones that succeeded |
-| `caps` | `(parent_id, local_date)` PK, `sent_count` — atomic daily-cap reservation (§4.5) |
+| `caps` | `(parent_id, local_date)` PK, `daily_cap`, `sent_count` — atomic daily-cap reservation for a whole flush page in one statement. `local_date` is in the parent's timezone; `daily_cap` is **snapshotted from `preferences` on the day's first write**, so a mid-day preference edit applies tomorrow rather than retroactively (§4.5 step 3) |
 
 ### 4.4 Queue consumer — idempotent effects, one batch
 
@@ -410,8 +441,9 @@ created by separating the claim from the effect. Don't separate them:
 //
 //   for each event in the batch:
 //     INSERT OR IGNORE inbox   (event_id, type, state, payload, …)
-//     INSERT OR IGNORE coalesce_events (event_id, child_id, kind, payload, …)   // learning.*
-//     conditional identity upsert / tombstone write (§4.8)                      // identity.*
+//     INSERT OR IGNORE coalesce_events (…, window_key = child_id,  scope='child')  // learning.*
+//     INSERT OR IGNORE coalesce_events (…, window_key = parent_id, scope='parent') // reporting.*
+//     conditional identity upsert / tombstone write (§4.8)                         // identity.*
 //
 // Crash before commit → nothing happened → queue redelivery re-runs the same
 // batch to the same result. Crash after commit → redelivery no-ops row by row.
@@ -421,6 +453,11 @@ created by separating the claim from the effect. Don't separate them:
   effect, duplicate dropped forever" hole cannot open.
 - An unknown `type` from a newer producer → `state = 'ignored'` row in the same batch + a metric,
   **never** retried into the DLQ.
+- **An unknown major `specVersion` gets the same treatment.** "Additive-only within a major; consumers
+  ignore unknown fields" (§2) covers `1.x`; a `2.0` envelope is by definition something this consumer
+  cannot render, and three retries plus a DLQ entry is the wrong answer to a deliberate producer
+  upgrade. Parse `specVersion` before the type switch: major ≠ 1 → `ignored` + a distinct metric (that
+  counter is how a premature producer rollout announces itself).
 - **No FCM call and no queue send happens on this path.** Sends belong to the flush cron and the send
   consumer (§4.5).
 - **One `batch()` per delivery batch** (up to 100 messages), not per message: D1 executes queries
@@ -442,37 +479,144 @@ pushes for one sitting, often while the parent is in the same room, is how a ser
 week two. So:
 
 1. **Learning events do not send directly** — the consumer appends them to `coalesce_events` (§4.4).
-   A child's window is *derived*, not stored: due when the newest membership row is ≥ 10 min old, or
-   the **oldest is ≥ 30 min old** (the hard cap — without it a busy session postpones its push
-   indefinitely).
-2. **A `* * * * *` cron flushes due windows.** For each due child it reads the exact membership set
-   `S`, renders one notification, then commits **one batch**:
-   - `INSERT OR IGNORE notifications (…, dedupe_key = '{childId}:{min(event_id in S)}')`
-   - `DELETE FROM coalesce_events WHERE event_id IN (S…) AND EXISTS
-     (SELECT 1 FROM notifications WHERE id = {this invocation's notification id})`
-   The guarded delete is what makes overlapping cron ticks safe: the loser's INSERT hits the UNIQUE
-   `dedupe_key` and no-ops, so its own notification id does not exist, so its DELETE removes nothing —
-   membership it read stays put for the next tick. An event that arrives mid-flush is a new row not in
-   `S`; it survives the delete and seeds the next window. No lease, no version column, no `flushing`
-   state. (Chunk the `IN` list across statements in the same batch if it ever nears SQLite bind limits.)
+   Windows are *derived*, not stored, and there are two scopes sharing one `window_key` column:
+   - `scope = 'child'` (learning events, `window_key = child_id`): due when the newest membership row
+     is ≥ 10 min old, or the **oldest is ≥ 30 min old** (the hard cap — without it a busy session
+     postpones its push indefinitely).
+   - `scope = 'parent'` (`reporting.week.closed`, `window_key = parent_id`): due when the newest row is
+     ≥ 5 min old, or the oldest is ≥ 15 min old. This short window exists for exactly one reason — to
+     let a multi-child parent's sibling events land before the digest renders (step 5).
+
+2. **A `* * * * *` cron flushes due windows — set-based, never per window.** A cron trigger is one
+   invocation, so it inherits **one** 1,000-query D1 budget (§5) and 30 s of CPU. A per-window loop
+   costs 4–6 queries each (membership read, cap reservation, INSERT, guarded DELETE, render lookups) and
+   therefore dies at **~200 due children per tick** — precisely the arithmetic §3.4 applies to the
+   weekly rider and §4.4 applies to the queue consumer. The flush obeys the same rule: **a fixed number
+   of queries per tick, independent of how many windows are due.**
+
+   ```sql
+   -- (1) due windows AND their full membership, one pass, one query
+   SELECT ce.event_id, ce.window_key, ce.scope, ce.child_id, ce.parent_id,
+          ce.kind, ce.payload_json, ce.arrived_at
+     FROM coalesce_events ce
+     JOIN (SELECT window_key
+             FROM coalesce_events
+            GROUP BY window_key, scope
+           HAVING (scope = 'child'  AND (MAX(arrived_at) <= ?1 OR MIN(arrived_at) <= ?2))
+               OR (scope = 'parent' AND (MAX(arrived_at) <= ?3 OR MIN(arrived_at) <= ?4))
+            ORDER BY MIN(arrived_at)      -- oldest window first: the tail cannot starve
+            LIMIT ?5) d
+       ON d.window_key = ce.window_key
+    ORDER BY ce.window_key, ce.arrived_at;
+   ```
+
+   `ORDER BY MIN(arrived_at)` is load-bearing, not tidiness: with an unspecified order an undersized
+   page serves the same windows every tick and the rest are never delivered — and because step 1's
+   30-minute hard cap keeps them permanently due, the backlog grows monotonically instead of draining.
+   `LIMIT ?5` turns overload from a silent failure into a declared parameter.
+
+   Then **one** query for render context (`children` ⋈ `parents` ⋈ `preferences` over the page), render
+   every notification **in memory**, reserve caps for the whole page (step 3), and commit **one batch
+   for the whole page** — two statements total, not two per window:
+
+   ```sql
+   -- multi-row insert; robo-worker's own idiom (learner-projection.ts:199,244,258,277)
+   INSERT OR IGNORE INTO notifications (id, parent_id, child_id, kind, title, body,
+                                        data_json, scheduled_for, state, dedupe_key)
+   SELECT json_extract(value,'$.id'), … FROM json_each(?1);
+
+   -- guarded delete; each pair carries its OWN notification id, so the guard stays per-window
+   -- rather than becoming all-or-nothing across the page
+   DELETE FROM coalesce_events
+    WHERE event_id IN (
+      SELECT json_extract(j.value,'$.event_id') FROM json_each(?2) j
+       WHERE EXISTS (SELECT 1 FROM notifications n
+                      WHERE n.id = json_extract(j.value,'$.notification_id')));
+   ```
+
+   `json_each(?)` binds **one** parameter regardless of page size, which is why the set-based form is
+   mandatory rather than merely neater: D1 caps bound parameters per query well below a page's worth of
+   `event_id`s, so an `IN (?,?,?…)` list cannot be chunked without reintroducing a per-window statement
+   count. Size `?5` against the bound JSON document — keep it clear of D1's string ceiling by carrying
+   only `event_id` and `notification_id` in the delete list, never payloads — and against measured CPU.
+   **Start at 500 and record the measured number here.**
+
+   **The concurrency proof is unchanged, and still per window.** Two overlapping ticks that read the
+   same due set render the same `dedupe_key`; the loser's row hits the UNIQUE constraint and no-ops, so
+   the loser's notification id never exists, so its half of the paired delete removes nothing — that
+   window's membership stays put for the next tick. An event that arrives mid-flush is a new row not in
+   the page; it survives the delete and seeds the next window. No lease, no version column, no
+   `flushing` state.
+
+   **`dedupe_key` is keyed on arrival order, not ledger order:**
+   `'{window_key}:{event_id of the oldest row by (arrived_at, event_id)}'`. The obvious
+   `min(event_id)` is **wrong**. `eventId` for `learning.*` is `{ledgerEventId}:{kind}` (§2), ledger
+   UUIDv7s land out of order as different child DOs drain their own outboxes (§3.5), and queues are
+   unordered (§4.8) — so a late arrival carrying a *smaller* ledger id would lower the key, the two
+   overlapping ticks would compute *different* keys, both INSERTs would succeed, and the parent gets two
+   pushes for one window. `arrived_at` is consumer-assigned at insert, so membership only ever grows
+   later in the ordering and the key is stable by construction. `event_id` breaks ties within a batch.
+
 3. **Preference gates run at flush, with defined outcomes** — "suppressed rows are marked" is not a
    semantics:
-   - quiet hours (parent's **local** timezone) → `deferred_quiet`, `scheduled_for` = quiet-end; the
-     morning flush folds multiple deferred rows for one parent into one catch-up push;
-   - daily cap → terminal `suppressed_cap`, never delivered later. The cap counts **logical
-     notifications, not device deliveries**, and is reserved atomically: conditional
-     `UPDATE caps SET sent_count = sent_count + 1 WHERE sent_count < daily_cap`, inspect
-     `meta.changes`. Weekly digests bypass the cap (they are one per week by construction);
-   - `PUSH_ENABLED = false` (dark rollout, §8) → terminal `suppressed_dark`, decided **at send time** —
-     flipping the flag on must not release days of accumulated backlog.
+   - **quiet hours** (parent's **local** timezone) → `deferred_quiet`, `scheduled_for` = quiet-end. The
+     quiet-end flush folds that parent's deferred rows into **one** catch-up push with
+     `dedupe_key = '{parentId}:catchup:{local_date}'`, and flips the folded rows to `canceled` in the
+     same batch so they cannot also send individually.
+   - **daily cap** → terminal `suppressed_cap`, never delivered later. The cap counts **logical
+     notifications, not device deliveries**, and the entire page reserves in **one** statement:
+
+     ```sql
+     INSERT INTO caps (parent_id, local_date, daily_cap, sent_count)
+     SELECT json_extract(value,'$.parent_id'), json_extract(value,'$.local_date'),
+            json_extract(value,'$.cap'),       json_extract(value,'$.want')
+       FROM json_each(?1)
+      -- first write of the day still has to respect the cap
+      WHERE json_extract(value,'$.want') <= json_extract(value,'$.cap')
+     ON CONFLICT (parent_id, local_date) DO UPDATE
+        SET sent_count = caps.sent_count + excluded.sent_count
+      WHERE caps.sent_count + excluded.sent_count <= caps.daily_cap
+     RETURNING parent_id;
+     ```
+
+     `RETURNING` names exactly the parents that won their slots; every other parent in the page →
+     `suppressed_cap`. This also removes the read-decide-write round trip the per-window form needed:
+     the cap outcome is known *before* the notification rows are written, so the INSERT stays in the
+     same batch as the delete.
+
+     The comparison is against `caps.daily_cap` — **snapshotted on the day's first write** — not against
+     the live `preferences` row, because `daily_cap` is per parent and one bound parameter cannot express
+     a page's worth of different limits. Snapshotting also gives the right behaviour when a parent edits
+     their cap mid-day: the new limit applies from tomorrow rather than retroactively re-judging
+     notifications already sent.
+
+     **A parent with several children due in one page is all-or-nothing:** `want` is that parent's
+     notification count for the page, and a request that would breach `daily_cap` is refused whole. A
+     partial fill would make *which child gets through* depend on scan order — arbitrary, unstable
+     between ticks, and impossible to explain to a parent. Weekly digests bypass the cap entirely (one
+     per week by construction).
+   - **`PUSH_ENABLED = false`** (dark rollout, §8) → terminal `suppressed_dark`, decided **at send
+     time** — flipping the flag on must not release days of accumulated backlog.
+
 4. **The cron enqueues; it never sends.** Due rows go onto the internal `SEND_QUEUE` via `sendBatch`
-   (100 per subrequest) and are marked `enqueued`; a queue consumer performs the FCM calls. This is a
-   scale requirement, not a style preference — see §5.1. The notification row doubles as the internal
-   outbox: a sweeper on the hourly cron re-enqueues `scheduled` rows that never made it to `enqueued`
-   (crash between commit and `sendBatch`).
-5. **Weekly digest is per parent.** `reporting.week.closed` events are per child (§3.4); the flush
-   groups a parent's children into **one** digest push (`dedupe_key = '{parentId}:{weekStart}'`) instead
-   of pushing a three-child parent three times.
+   (100 per subrequest) and are marked `enqueued` with `enqueued_at`; a queue consumer performs the FCM
+   calls. This is a scale requirement, not a style preference — see §5.1. The notification row doubles
+   as the internal outbox: a sweeper on the hourly cron re-enqueues `scheduled` rows **older than 15
+   minutes** that never reached `enqueued` (crash between commit and `sendBatch`). The age floor is
+   required — without it the sweeper races a flush that is mid-tick and re-enqueues rows that were about
+   to be sent normally.
+
+5. **Weekly digest is per parent.** `reporting.week.closed` events are per child (§3.4); they stage as
+   `scope = 'parent'` membership (step 1), so the same flush renders **one** digest push per parent
+   (`dedupe_key = '{parentId}:{weekStart}'`) instead of pushing a three-child parent three times. No
+   separate code path — the weekly case is a different `window_key`, not a different mechanism.
+
+**If the due set persistently exceeds `?page`,** the escalation is the one §5.1 already established one
+level down: a cron trigger is one invocation, so the cron stops doing the work and starts handing it
+out. Enqueue per-window flush jobs onto an internal queue and let consumers — up to 250 invocations,
+each with its own D1 and CPU budget — run this same set-based flush over a slice. Nothing above changes
+shape; only who runs it does. Don't build it before the `?page` ceiling and its real drain rate are
+measured.
 
 > The "queue carries domain events, not notification jobs" principle governs the **inter-service**
 > boundary (robo-worker → tuni-noti). `SEND_QUEUE` is internal to tuni-noti and deliberately *does*
@@ -595,7 +739,8 @@ re-derive them.
 | Consumer invocation | 15 min wall / 5 min CPU (default 30 s) | generous |
 | Cron CPU | 30 s (< 1 h interval) · 15 min (≥ 1 h) | the 1-min flush cron gets 30 s; the weekly rider gets 15 min |
 | Subrequests per invocation | 10,000 (Paid) | headroom, not a fan-out target — connections, CPU and queue throughput bind first |
-| **D1 queries per invocation** | **1,000** | kills any per-child query loop. Batched statements each count — `batch()` buys atomicity and round trips, not allowance |
+| **D1 queries per invocation** | **1,000** | kills any per-child query loop — in the weekly rider (§3.4) *and* in the 1-min flush cron (§4.5 step 2), which is the easier one to miss. Batched statements each count: `batch()` buys atomicity and round trips, not allowance |
+| D1 bound parameters per query | small — **confirm the current figure before implementing** | kills `IN (?,?,?…)` over a flush page. Bind one JSON document and expand with `json_each(?)`, as robo-worker already does (§4.5) |
 | D1 max database size | **10 GB** | kills unbounded `inbox` / `notifications`; indexes and SQLite overhead mean raw payload arithmetic is optimistic |
 | D1 execution | sequential, single-threaded per DB | 250 consumers contend on one DB — batch your writes; load-test the real schema before trusting any writes/s figure |
 
@@ -609,15 +754,28 @@ A **cron trigger is one invocation.** Therefore the flush cron must never call F
 enqueues; queue consumers send. Consumers auto-scale toward 250 invocations, each with its own connection
 budget — orders of magnitude more fan-out for what is essentially a moved function call.
 
+**"One invocation" binds twice, and the second one is easy to miss.** Moving FCM out of the cron
+resolves the connection limit but leaves the cron holding all the *D1* work — and a per-window flush
+loop spends 4–6 queries per due child against the same 1,000-query invocation budget. That ceiling
+(~200 due children per tick) arrives **before** the connection ceiling does, so a design that fixes only
+the FCM half still fails at 100k children. §4.5 step 2 is set-based for this reason.
+
 Sizing at ~1 coalesced push per session, Vietnamese after-school peak:
 
-| Active children | Peak pushes/min | Cron sends directly | Consumers send |
-|---|---|---|---|
-| 10,000 | ~100 | fine | fine |
-| 100,000 | ~1,000 | marginal | fine |
-| 1,000,000 | ~10,000 | **breaks** | fine |
+| Active children | Peak pushes/min | Cron sends FCM directly | Per-window flush loop (D1 budget) | Set-based flush + consumers send |
+|---|---|---|---|---|
+| 10,000 | ~100 | fine | ~500 queries — fits, ~2× headroom | fine |
+| 100,000 | ~1,000 | marginal | ~5,000 queries — **breaks** | fine |
+| 1,000,000 | ~10,000 | **breaks** | ~50,000 queries — **breaks** | fine at `?page`; escalate to a flush queue (§4.5) |
 
-The design is built the second way from the start, because retrofitting it means re-testing every
+The failure mode of the middle column deserves naming, because it is not an error: every effect stays
+idempotent and the guarded delete means nothing is lost or corrupted. The tick simply runs out of budget
+partway, the unserved windows stay permanently due (step 1's 30-minute hard cap guarantees it), the
+backlog grows every tick, and `coalesce_events` stops being the transient table §5.2 assumes. The only
+symptom is *some children silently never get pushes* — which a dark rollout (§8) cannot surface either,
+since `notifications` rows for the served children look perfectly healthy.
+
+The design is built the right-hand way from the start, because retrofitting it means re-testing every
 delivery path.
 
 ### 5.2 Retention is a correctness requirement, not housekeeping
@@ -628,7 +786,7 @@ D1 caps at **10 GB per database**, and the failure mode is the whole service, no
 |---|---|---|
 | `inbox` | 1 row per event, forever | **prune to 30 days** — must outlive queue retention (configurable to 14 d) *plus* DLQ replay (§4.4) |
 | `notifications` + `deliveries` | 1 row per push / per token | **prune to 90 days** |
-| `coalesce_events` | transient | deleted on flush; sweep rows older than the 30-min window cap |
+| `coalesce_events` | transient **only if the flush keeps up** | deleted on flush; sweep rows older than the 30-min window cap. Alert on row count and on oldest `arrived_at` — a rising floor here is the earliest signal that `?page` (§4.5) is undersized, and the *only* one, since undelivered windows raise no errors (§5.1) |
 | `caps` | 1 row per parent per active day | prune with `notifications` |
 | `parents`, `children`, `push_tokens`, `preferences` | bounded by user count | no policy needed |
 
@@ -676,13 +834,19 @@ Steps 6–7 and step 8 are independent once the contract (5) is frozen, so they 
 1. **`pnpm vitest run` (tuni-noti)** — real D1 in workerd via `applyD1Migrations`. Cover:
    - concurrent duplicate delivery of one event → one membership row, one inbox row (idempotent batch);
    - crash-replay: re-running a committed batch is a row-by-row no-op;
-   - unknown event type → `ignored`, never DLQ;
+   - unknown event type → `ignored`, never DLQ; unknown major `specVersion` → `ignored` + its own metric;
    - coalescing merges 3 events into 1 push; an event arriving mid-flush survives into the next window;
    - **overlapping cron flushes** of the same due set → exactly one notification (dedupe_key + guarded
      delete: the loser deletes nothing);
+   - **`dedupe_key` stability under out-of-order arrival** — replay a window where the last-arriving
+     event carries the *smallest* ledger `eventId`, across two overlapping flushes: still exactly one
+     notification. This is the case a ledger-ordered key gets wrong (§4.5 step 2);
    - 30-min window cap fires for a continuously active session;
-   - quiet hours → `deferred_quiet` and delivery at quiet-end; daily cap → terminal `suppressed_cap`,
-     reserved atomically under concurrency; weekly digest bypasses the cap;
+   - quiet hours → `deferred_quiet` and delivery at quiet-end, folded into **one** catch-up push per
+     parent per local date; daily cap → terminal `suppressed_cap`, reserved atomically under
+     concurrency; a parent with 3 children due and 2 slots left is refused **whole**, not partially;
+     weekly digest bypasses the cap;
+   - weekly digest: 3 `reporting.week.closed` events for one parent's 3 children → **one** push;
    - `PUSH_ENABLED` off marks `suppressed_dark` at send time; flipping it on releases nothing;
    - `UNREGISTERED` disables the token; **payload-shaped `INVALID_ARGUMENT` does not**;
    - re-registering a token under a second parent atomically detaches it from the first;
@@ -690,11 +854,21 @@ Steps 6–7 and step 8 are independent once the contract (5) is frozen, so they 
      deliveries, purges child history — and **leaves the parent's tokens intact**; a late upsert does
      not resurrect the child; a late learning event is `ignored`;
    - rename LWW: a delayed older `identity.child.upserted` cannot regress a newer name.
+1b. **Budget test — the flush cron at scale.** The correctness suite above passes at any size, so it
+   cannot catch §5.1's middle column. Seed `?page` × 2 due windows, run one flush tick, and assert
+   **(a)** the D1 query count for the invocation is a small constant — not a function of the due count;
+   **(b)** every window is served within a bounded number of ticks, i.e. the oldest `arrived_at` in
+   `coalesce_events` strictly decreases in age, proving `ORDER BY MIN(arrived_at)` prevents tail
+   starvation; **(c)** `coalesce_events` drains to empty rather than growing tick over tick. Assert the
+   same query-count invariant for the weekly rider (§3.4) with a seeded multi-thousand-child population.
+   Record the measured per-tick query count and the chosen `?page` back into §4.5.
 2. **`pnpm vitest run` (robo-worker)** — `buildNotificationEvents` maps `commitFold` projected outputs
    to the contract with **stable derived `eventId`s** (pure, no bindings — same fold twice ⇒ identical
    events); **a throwing `NOTI_QUEUE` does not fail the lesson fold** (§3.2) but increments the metric;
    the deletion stage propagates queue failure into pipeline retry (§3.6); weekly aggregate counts match
-   seeded fixtures and re-running the rider emits identical `eventId`s.
+   seeded fixtures — **`stars` and `missionsAchieved` asserted separately**, against a seeded child
+   holding one multi-star award, which is the case `COUNT(*)` alone gets wrong (§3.4) — `weekStart` /
+   `weekEnd` land on Vietnam-local midnights, and re-running the rider emits identical `eventId`s.
 3. **Contract test** — golden + negative fixtures per event type, asserted by both repos against the
    pinned SHA (§2), so producer and consumer cannot drift silently.
 4. **End-to-end on dev** — seed a child → drive a lesson to completion via the existing e2e harness
