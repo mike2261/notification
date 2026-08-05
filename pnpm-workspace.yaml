@@ -1,0 +1,8 @@
+# pnpm 11 reads build-script approval from here, not from package.json.
+# workerd and esbuild ship prebuilt binaries via a postinstall script — without
+# these, `wrangler dev` and vitest-pool-workers have no runtime to start.
+# sharp is a transitive dep we never call; denied rather than trusted.
+allowBuilds:
+  esbuild: true
+  sharp: false
+  workerd: true

@@ -1,0 +1,32 @@
+{
+  "name": "tuni-noti",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "sh scripts/deploy.sh",
+    "deploy:direct": "wrangler deploy --minify --env=\"\"",
+    "types": "wrangler types",
+    "lint": "pnpm biome check",
+    "lint:fix": "pnpm biome check --write",
+    "format": "pnpm biome format --write",
+    "type-check": "tsc --noEmit",
+    "check:deploy": "wrangler deploy --dry-run --outdir=dist/dry-run && node scripts/check-startup.mjs",
+    "test": "vitest run",
+    "skeleton:push": "node scripts/skeleton-push.mjs",
+    "deploy:bootstrap": "BOOTSTRAP=1 sh scripts/deploy.sh",
+    "wif:key": "node scripts/gen-wif-key.mjs"
+  },
+  "dependencies": {
+    "arktype": "^2.2.0",
+    "hono": "^4.12.12"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.6",
+    "@cloudflare/vitest-pool-workers": "^0.14.0",
+    "@types/node": "^25.5.2",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.2",
+    "wrangler": "^4.92.0"
+  }
+}

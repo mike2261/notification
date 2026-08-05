@@ -811,7 +811,8 @@ batch — that just moves the queueing.
 ## 6. Implementation order
 
 1. **This document** — `docs/design.md`, kept current as the service evolves.
-2. **Walking skeleton** — GCP topology + one real push (§7.0). Blocks everything else.
+2. **Walking skeleton** — GCP topology + one real push (§7.0). Blocks everything else. Note the forced
+   ordering there: the first deploy runs before the WIF provider exists and must be smoked accordingly.
 3. **Auth migration** (robo-worker, §1.4) — ES256 parent sessions + dual verification. Independent of
    the skeleton; must land before step 6 ships to real parents.
 4. **Scaffold** — `package.json`, `wrangler.jsonc`, copy-in list (§4.2), migrations, `/healthz`.
@@ -831,6 +832,21 @@ Steps 6–7 and step 8 are independent once the contract (5) is frozen, so they 
    WIF provider, a new SA, and FCM role bindings have never been exercised together. Stand up the
    provider + SA, deploy a stub Worker serving `/auth/jwks`, mint an FCM access token through the copied
    `wif.ts`, and send one message to a real dev handset. Nothing else gets built until a push arrives.
+   Runbook: `docs/walking-skeleton.md`.
+
+   > **The steps are circular, and the order is forced.** A WIF provider verifies assertions against the
+   > JWKS served at *its configured issuer*; tuni-noti's issuer is tuni-noti's own Worker URL. So the
+   > Worker must be **deployed and serving `/auth/jwks` before the provider can be created** — which
+   > means the first deploy necessarily has no key and no provider, and its smoke MUST NOT assert the
+   > WIF chain it is about to fail. `scripts/deploy.sh` takes `BOOTSTRAP=1` for exactly that one deploy;
+   > every deploy after it fails unless `/healthz?deep=1` mints a real token. This is also the second
+   > reason robo-worker's provider cannot be shared (§4.6 step 5): not just that a provider trusts one
+   > JWKS, but that adopting ours would mean pointing *their* provider at *our* URL.
+
+   `/healthz?deep=1` is the skeleton's permanent residue: it runs the full self-signed assertion → STS
+   exchange → SA impersonation inside the responding isolate, so the deploy pipeline keeps proving the
+   topology long after the one-off push. It is this service's analogue of robo-worker's
+   `ensureCourseRuntime()` probe.
 1. **`pnpm vitest run` (tuni-noti)** — real D1 in workerd via `applyD1Migrations`. Cover:
    - concurrent duplicate delivery of one event → one membership row, one inbox row (idempotent batch);
    - crash-replay: re-running a committed batch is a row-by-row no-op;

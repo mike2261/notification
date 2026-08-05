@@ -1,0 +1,71 @@
+/**
+ * tuni-noti — walking skeleton (design.md §7.0).
+ *
+ * Deliberately minimal: no D1, no Queues, no Durable Objects. The skeleton
+ * exists to prove ONE thing that no amount of code review can prove — that the
+ * GCP topology (a second WIF provider + a dedicated SA + an FCM role binding)
+ * actually mints a usable FCM access token and lands a push on a real handset.
+ * Bindings for the real service arrive in design.md §6 step 4.
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "tuni-noti",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-04-07",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	// Runtime version identity for /healthz — scripts/deploy.sh smokes the
+	// uploaded version at 0% traffic and asserts the responding version id.
+	"version_metadata": {
+		"binding": "CF_VERSION_METADATA"
+	},
+	"observability": {
+		"enabled": true
+	},
+	"upload_source_maps": true,
+	// WIF_PRIVATE_KEY and SKELETON_TOKEN are set as dashboard secrets, never in
+	// this file. keep_vars stops a deploy from wiping them. Everything in the
+	// "vars" block below IS overwritten from this file on every deploy — edit
+	// it here, not in the dashboard.
+	"keep_vars": true,
+	"vars": {
+		// --- FILL IN AFTER THE GCP CONSOLE WORK (docs/walking-skeleton.md §1) ---
+		// The Worker's own public URL. GCP's WIF provider fetches
+		// {WIF_ISSUER}/auth/jwks to verify our self-signed assertions, so this
+		// MUST equal the provider's configured issuer exactly — robo-worker's
+		// provider cannot be reused for precisely this reason (design.md §4.6).
+		"WIF_ISSUER": "https://tuni-noti.taskfi.workers.dev",
+		"WIF_SUBJECT": "tuni-noti",
+		// STS wants the audience as a "full resource name": leading `//`, no
+		// protocol. The GCP Console shows it with `https://` and the API rejects
+		// that form.
+		"WIF_AUDIENCE": "//iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/providers/PROVIDER_ID",
+		// Dedicated SA — NOT robo-worker's bridge SA (design.md §4.6 step 3).
+		"FCM_SA_EMAIL": "tuni-noti@PROJECT_ID.iam.gserviceaccount.com",
+		// Firebase project id (the string id, not the number) — it goes straight
+		// into the messages:send path.
+		"FCM_PROJECT_ID": "FIREBASE_PROJECT_ID",
+		// Off by default. The skeleton push route mints a GCP token and sends
+		// real pushes; it stays disabled unless someone is actively running §7.0.
+		"SKELETON_ENABLED": "0"
+	},
+	"env": {
+		// wrangler envs do NOT inherit — every binding and var is duplicated here
+		// on purpose (design.md §3.3). Values are fakes; no test touches GCP.
+		"test": {
+			"version_metadata": {
+				"binding": "CF_VERSION_METADATA"
+			},
+			"vars": {
+				"WIF_ISSUER": "https://tuni-noti.test",
+				"WIF_SUBJECT": "tuni-noti",
+				"WIF_AUDIENCE": "//iam.googleapis.com/projects/000/locations/global/workloadIdentityPools/test-pool/providers/test-provider",
+				"FCM_SA_EMAIL": "tuni-noti@test.iam.gserviceaccount.com",
+				"FCM_PROJECT_ID": "test-firebase-project",
+				"SKELETON_ENABLED": "1",
+				"SKELETON_TOKEN": "test-skeleton-token"
+			}
+		}
+	}
+}
