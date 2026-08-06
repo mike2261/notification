@@ -32,7 +32,7 @@ function deleted(overrides: Record<string, unknown> = {}) {
 
 describe("planBatch", () => {
   it("writes exactly one inbox row per event, marked processed", () => {
-    const stmts = planBatch([parseEnvelope(upserted())], RECEIVED_AT);
+    const stmts = planBatch([parseEnvelope(upserted())], RECEIVED_AT, new Set());
     const inboxStmts = stmts.filter((s) => s.sql.includes("INTO inbox"));
     expect(inboxStmts).toHaveLength(1);
     expect(inboxStmts[0].sql).toMatch(/INSERT OR IGNORE/);
@@ -40,38 +40,38 @@ describe("planBatch", () => {
   });
 
   it("marks an unsupported version as ignored, with no other effect", () => {
-    const stmts = planBatch([parseEnvelope(upserted({ specVersion: "2.0" }))], RECEIVED_AT);
+    const stmts = planBatch([parseEnvelope(upserted({ specVersion: "2.0" }))], RECEIVED_AT, new Set());
     expect(stmts).toHaveLength(1);
     expect(stmts[0].sql).toMatch(/INTO inbox/);
     expect(stmts[0].params).toContain("ignored");
   });
 
   it("marks an unknown type as ignored, with no other effect", () => {
-    const stmts = planBatch([parseEnvelope(upserted({ type: "learning.nope" }))], RECEIVED_AT);
+    const stmts = planBatch([parseEnvelope(upserted({ type: "learning.nope" }))], RECEIVED_AT, new Set());
     expect(stmts).toHaveLength(1);
     expect(stmts[0].params).toContain("ignored");
   });
 
   it("drops a malformed event with no recoverable id entirely — nothing to key an inbox row on", () => {
-    const stmts = planBatch([parseEnvelope({ nope: 1 })], RECEIVED_AT);
+    const stmts = planBatch([parseEnvelope({ nope: 1 })], RECEIVED_AT, new Set());
     expect(stmts).toHaveLength(0);
   });
 
   it("still records a malformed-but-identifiable event as ignored", () => {
-    const stmts = planBatch([parseEnvelope(upserted({ data: { age: "nope" } }))], RECEIVED_AT);
+    const stmts = planBatch([parseEnvelope(upserted({ data: { age: "nope" } }))], RECEIVED_AT, new Set());
     expect(stmts).toHaveLength(1);
     expect(stmts[0].params).toContain("ignored");
   });
 
   it("plans a parent row, a child upsert, and an inbox row for identity.child.upserted", () => {
-    const stmts = planBatch([parseEnvelope(upserted())], RECEIVED_AT);
+    const stmts = planBatch([parseEnvelope(upserted())], RECEIVED_AT, new Set());
     expect(stmts.some((s) => s.sql.includes("INTO parents"))).toBe(true);
     expect(stmts.some((s) => s.sql.includes("INTO children"))).toBe(true);
     expect(stmts.some((s) => s.sql.includes("INTO inbox"))).toBe(true);
   });
 
   it("guards the child upsert on identity_updated_at so an older rename cannot regress a newer name", () => {
-    const stmts = planBatch([parseEnvelope(upserted())], RECEIVED_AT);
+    const stmts = planBatch([parseEnvelope(upserted())], RECEIVED_AT, new Set());
     const childStmt = stmts.find((s) => s.sql.includes("INTO children"));
     expect(childStmt).toBeDefined();
     // The LWW guard (design.md §4.8 rule 2) — without this a delayed older
@@ -80,14 +80,14 @@ describe("planBatch", () => {
   });
 
   it("never clears deleted_at on upsert — the tombstone is terminal", () => {
-    const stmts = planBatch([parseEnvelope(upserted())], RECEIVED_AT);
+    const stmts = planBatch([parseEnvelope(upserted())], RECEIVED_AT, new Set());
     const childStmt = stmts.find((s) => s.sql.includes("INTO children"));
     // design.md §4.8 rule 3: a late upsert must not resurrect a deleted child.
     expect(childStmt?.sql).not.toMatch(/deleted_at\s*=\s*NULL/i);
   });
 
   it("plans a tombstone write plus cancellations for identity.child.deleted", () => {
-    const stmts = planBatch([parseEnvelope(deleted())], RECEIVED_AT);
+    const stmts = planBatch([parseEnvelope(deleted())], RECEIVED_AT, new Set());
     const sqls = stmts.map((s) => s.sql).join("\n");
     expect(sqls).toMatch(/deleted_at/);
     // §4.8 rule 4: deletion cancels in-flight work in the SAME batch.
@@ -110,6 +110,7 @@ describe("planBatch", () => {
         ),
       ],
       RECEIVED_AT,
+      new Set(),
     );
     // Two events → two inbox rows. The count is what proves we're not
     // silently collapsing distinct events.
