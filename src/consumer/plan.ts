@@ -42,6 +42,14 @@ VALUES (?, ?, ?, ?, ?)
 ON CONFLICT (child_id) DO UPDATE SET
   deleted_at = COALESCE(children.deleted_at, excluded.deleted_at)`;
 
+// Append-only pending membership (design.md §4.5 step 1). window_key is
+// child_id for learning events and parent_id for reporting ones, so ONE
+// grouped query in the flush serves both scopes (§4.3).
+const INSERT_COALESCE = `
+INSERT OR IGNORE INTO coalesce_events
+  (event_id, window_key, scope, child_id, parent_id, kind, payload_json, arrived_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+
 // §4.8 rule 4: cancel in-flight work in the same batch as the tombstone.
 const CANCEL_COALESCE = `DELETE FROM coalesce_events WHERE child_id = ?`;
 
@@ -94,17 +102,42 @@ function planIdentityDeleted(event: EventV1, receivedAt: string): PlannedStateme
 }
 
 /**
- * Learning and reporting events are recorded in the inbox here and otherwise
- * inert — coalescing membership arrives in Part 2 of this plan series
- * (design.md §4.5). Recording them now is not a placeholder: the inbox row IS
- * the dedupe record, and it must exist from the first version of the consumer
- * or replays would double-process once Part 2 lands.
+ * Learning and reporting events stage as coalescing membership rather than
+ * sending directly (design.md §4.5 step 1) — three pushes for one 10-minute
+ * sitting is how a service gets muted in week two.
+ *
+ * `arrived_at` is the CONSUMER-assigned receivedAt, never the event's
+ * occurredAt: the flush orders and keys by arrival, because ledger order is
+ * not stable under unordered queues (§4.5 step 2).
  */
-function planRecordOnly(event: EventV1, receivedAt: string): PlannedStatement[] {
-  return [inboxRow(event.eventId, event.type, "processed", event, receivedAt)];
+function planCoalesced(event: EventV1, receivedAt: string, tombstoned: ReadonlySet<string>): PlannedStatement[] {
+  const { parentId, childId } = event.subject;
+
+  // §4.8 rule 3: a late event for a tombstoned child is `ignored`, and stages
+  // nothing. The tombstone is terminal, so this can never become processable.
+  if (tombstoned.has(childId)) {
+    return [inboxRow(event.eventId, event.type, "ignored", event, receivedAt)];
+  }
+
+  const isReporting = event.type === "reporting.week.closed";
+  const scope = isReporting ? "parent" : "child";
+  const windowKey = isReporting ? parentId : childId;
+
+  return [
+    { sql: INSERT_PARENT, params: [parentId] },
+    {
+      sql: INSERT_COALESCE,
+      params: [event.eventId, windowKey, scope, childId, parentId, event.type, JSON.stringify(event), receivedAt],
+    },
+    inboxRow(event.eventId, event.type, "processed", event, receivedAt),
+  ];
 }
 
-export function planBatch(results: ParseResult[], receivedAt: string): PlannedStatement[] {
+export function planBatch(
+  results: ParseResult[],
+  receivedAt: string,
+  tombstoned: ReadonlySet<string>,
+): PlannedStatement[] {
   const stmts: PlannedStatement[] = [];
 
   for (const result of results) {
@@ -124,7 +157,7 @@ export function planBatch(results: ParseResult[], receivedAt: string): PlannedSt
           stmts.push(inboxRow(event.eventId, event.type, "ignored", event, receivedAt));
           break;
         default:
-          stmts.push(...planRecordOnly(event, receivedAt));
+          stmts.push(...planCoalesced(event, receivedAt, tombstoned));
           break;
       }
       continue;

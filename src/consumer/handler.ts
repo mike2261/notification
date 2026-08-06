@@ -11,9 +11,34 @@
 import { parseEnvelope } from "./parse";
 import { planBatch } from "./plan";
 
+/**
+ * Which of these children already carry a terminal tombstone (§4.8 rule 3).
+ * ONE query per delivery batch — not per message. Deciding this inside the
+ * batch is impossible: the inbox state depends on it, and a single batch
+ * cannot branch on a read.
+ */
+async function tombstonedChildIds(d1: D1Database, childIds: string[]): Promise<Set<string>> {
+  if (childIds.length === 0) return new Set();
+  // json_each keeps this ONE bound parameter regardless of batch size — D1
+  // caps bound parameters well below 100 (§5).
+  const { results } = await d1
+    .prepare(
+      `SELECT child_id FROM children
+        WHERE deleted_at IS NOT NULL
+          AND child_id IN (SELECT value FROM json_each(?1))`,
+    )
+    .bind(JSON.stringify(childIds))
+    .all<{ child_id: string }>();
+  return new Set(results.map((r) => r.child_id));
+}
+
 export async function consumeBatch(d1: D1Database, payloads: unknown[]): Promise<void> {
   const results = payloads.map(parseEnvelope);
-  const planned = planBatch(results, new Date().toISOString());
+
+  const childIds = [...new Set(results.flatMap((r) => (r.kind === "ok" ? [r.event.subject.childId] : [])))];
+  const tombstoned = await tombstonedChildIds(d1, childIds);
+
+  const planned = planBatch(results, new Date().toISOString(), tombstoned);
 
   for (const result of results) {
     if (result.kind === "ok") continue;
