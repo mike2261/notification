@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { b64url, parseJwt } from "../src/auth/jwt";
-import { __resetWifCaches, FCM_SCOPE, getAccessToken, getPublicJwk, type WifEnv } from "../src/auth/wif";
+import { __resetWifCaches, FCM_SCOPE, getAccessToken, getPublicJwk, STS_SCOPE, type WifEnv } from "../src/auth/wif";
 
 // The walking skeleton exists to prove the GCP topology, and the half of that
 // which does NOT need GCP is provable here: that workerd's Web Crypto produces
@@ -94,7 +94,10 @@ describe("wif", () => {
     const form = new URLSearchParams(sts.init.body as string);
     expect(form.get("grant_type")).toBe("urn:ietf:params:oauth:grant-type:token-exchange");
     expect(form.get("subject_token_type")).toBe("urn:ietf:params:oauth:token-type:jwt");
-    expect(form.get("scope")).toBe(FCM_SCOPE);
+    // Must be cloud-platform, not FCM_SCOPE: iamcredentials.googleapis.com
+    // rejects the impersonation call below with "insufficient authentication
+    // scopes" if the intermediate federated token is scoped any narrower.
+    expect(form.get("scope")).toBe(STS_SCOPE);
     // Full resource name: leading `//`, no protocol. The console shows this
     // value with https:// and the API rejects that form.
     expect(form.get("audience")).toBe(AUDIENCE);
@@ -129,15 +132,19 @@ describe("wif", () => {
     expect(JSON.parse(iam.init.body as string)).toEqual({ scope: [FCM_SCOPE], lifetime: "3600s" });
   });
 
-  it("scopes the token to FCM only, never cloud-platform", async () => {
-    // Upstream's module constant is cloud-platform. Copying that would give a
-    // notification service a credential for the whole project (design.md §4.6).
+  it("narrows the OUTPUT token to FCM only, never cloud-platform", async () => {
+    // Upstream's module constant is cloud-platform. Handing a notification
+    // service a credential for the whole project would be the mistake
+    // design.md §4.6 calls out — but that constraint applies to the token
+    // this function *returns*, not to the intermediate federated token STS
+    // hands back internally (that one must be cloud-platform; see above).
     expect(FCM_SCOPE).toBe("https://www.googleapis.com/auth/firebase.messaging");
     const { env } = await makeEnv();
     const captured: Captured[] = [];
     stubGoogle(captured);
     await getAccessToken(env);
-    expect(new URLSearchParams(captured[0].init.body as string).get("scope")).toBe(FCM_SCOPE);
+    const [, iam] = captured;
+    expect(JSON.parse(iam.init.body as string).scope).toEqual([FCM_SCOPE]);
   });
 
   it("caches the token and dedupes concurrent mints into one exchange", async () => {

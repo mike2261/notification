@@ -121,7 +121,7 @@ gcloud projects add-iam-policy-binding FIREBASE_PROJECT_ID \
 
 > If the Firebase project differs from `PROJECT_ID`, the two commands above are the cross-project grant —
 > the SA lives in `PROJECT_ID`, the role is granted on `FIREBASE_PROJECT_ID`. If you would rather not
-> manage a custom role, `roles/firebasemessaging.admin` works and is still far narrower than
+> manage a custom role, `roles/firebasecloudmessaging.admin` works and is still far narrower than
 > `roles/firebase.admin`. Do not grant project-level `roles/editor`.
 
 Then let the WIF principal impersonate it:

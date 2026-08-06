@@ -36,6 +36,17 @@ describe("GET /healthz", () => {
   });
 });
 
+describe("GET /.well-known/openid-configuration", () => {
+  it("points jwks_uri at this issuer's /auth/jwks", async () => {
+    const res = await SELF.fetch("https://tuni-noti.test/.well-known/openid-configuration");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      issuer: "https://tuni-noti.test",
+      jwks_uri: "https://tuni-noti.test/auth/jwks",
+    });
+  });
+});
+
 describe("GET /auth/jwks", () => {
   it("503s with a legible reason when the signing key is missing", async () => {
     const res = await SELF.fetch("https://tuni-noti.test/auth/jwks");

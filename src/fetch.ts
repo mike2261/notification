@@ -62,6 +62,21 @@ async function getAccessTokenForHealth(env: Env): Promise<string> {
   return getAccessToken(env as unknown as FcmEnv);
 }
 
+// OIDC discovery document. GCP's WIF provider fetches {issuer}/.well-known/
+// openid-configuration first to learn jwks_uri before it ever requests
+// /auth/jwks — skip this route and every STS exchange fails with "Error
+// connecting to the given credential's issuer" (docs/walking-skeleton.md §4).
+app.get("/.well-known/openid-configuration", (c) => {
+  const issuer = c.env.WIF_ISSUER;
+  return c.json({
+    issuer,
+    jwks_uri: `${issuer}/auth/jwks`,
+    response_types_supported: ["id_token"],
+    subject_types_supported: ["public"],
+    id_token_signing_alg_values_supported: ["ES256"],
+  });
+});
+
 // JWKS endpoint for Workload Identity Federation. GCP's WIF provider fetches
 // this URL to verify our self-signed assertions, so it must be reachable from
 // Google's servers and must sit at exactly the issuer the provider is

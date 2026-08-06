@@ -35,17 +35,18 @@
 		// {WIF_ISSUER}/auth/jwks to verify our self-signed assertions, so this
 		// MUST equal the provider's configured issuer exactly — robo-worker's
 		// provider cannot be reused for precisely this reason (design.md §4.6).
-		"WIF_ISSUER": "https://tuni-noti.taskfi.workers.dev",
+		"WIF_ISSUER": "https://tuni-noti.anhduc22601.workers.dev",
 		"WIF_SUBJECT": "tuni-noti",
 		// STS wants the audience as a "full resource name": leading `//`, no
 		// protocol. The GCP Console shows it with `https://` and the API rejects
 		// that form.
-		"WIF_AUDIENCE": "//iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/providers/PROVIDER_ID",
+		"WIF_AUDIENCE": "//iam.googleapis.com/projects/273162862419/locations/global/workloadIdentityPools/robo-cf-worker-pool/providers/tuni-noti",
 		// Dedicated SA — NOT robo-worker's bridge SA (design.md §4.6 step 3).
-		"FCM_SA_EMAIL": "tuni-noti@PROJECT_ID.iam.gserviceaccount.com",
+		"FCM_SA_EMAIL": "tuni-noti@ai-robotics-496803.iam.gserviceaccount.com",
 		// Firebase project id (the string id, not the number) — it goes straight
-		// into the messages:send path.
-		"FCM_PROJECT_ID": "FIREBASE_PROJECT_ID",
+		// into the messages:send path. Differs from the GCP project the SA lives
+		// in (ai-robotics-496803) — a genuine cross-project setup.
+		"FCM_PROJECT_ID": "robo-tuni-app",
 		// Off by default. The skeleton push route mints a GCP token and sends
 		// real pushes; it stays disabled unless someone is actively running §7.0.
 		"SKELETON_ENABLED": "0"

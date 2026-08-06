@@ -3,10 +3,17 @@
 // Workload Identity Federation auth helper. Copied from robo-worker
 // (src/auth/wif.ts) with three deliberate changes — see design.md §4.6:
 //
-//   1. `scope` is a PARAMETER, not the module constant it is upstream. FCM
-//      needs https://www.googleapis.com/auth/firebase.messaging, and a token
-//      scoped to cloud-platform would be a far wider credential than this
-//      service has any business holding.
+//   1. `scope` is a PARAMETER, not the module constant it is upstream — it is
+//      what narrows the FINAL, returned SA token to
+//      https://www.googleapis.com/auth/firebase.messaging instead of upstream's
+//      wider default. It only narrows the `generateAccessToken` request body
+//      (the output token); the STS token-exchange step still requests
+//      cloud-platform, because iamcredentials.googleapis.com itself rejects a
+//      bearer token scoped any narrower ("insufficient authentication scopes")
+//      regardless of what scope is being requested for the token it mints. That
+//      intermediate token grants nothing beyond what its IAM bindings already
+//      allow — workloadIdentityUser on exactly one SA — so requesting
+//      cloud-platform here does not widen what this service can actually do.
 //   2. Provider identity comes from `env`, not from hardcoded constants.
 //      Upstream hardcodes them as "not secrets, just config", which is true —
 //      but tuni-noti's pool/provider/SA do not exist until someone finishes the
@@ -30,6 +37,12 @@
 import { b64url, jsonBytes } from "./jwt";
 
 export const FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
+
+// Scope for the STS token-exchange step only — see the file header. Not
+// configurable: it must cover the IAM Credentials API regardless of what the
+// caller ultimately wants the minted SA token scoped to. Exported only so
+// tests can assert against it by name instead of a repeated string literal.
+export const STS_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
 
 // Refresh slightly before the server-stated expiry so an in-flight request
 // never races a token that is about to fall off.
@@ -154,7 +167,7 @@ async function mintFreshAccessToken(env: WifEnv, scope: string, cacheKey: string
     body: new URLSearchParams({
       grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
       audience: env.WIF_AUDIENCE,
-      scope,
+      scope: STS_SCOPE,
       requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
       subject_token_type: "urn:ietf:params:oauth:token-type:jwt",
       subject_token: jwt,
