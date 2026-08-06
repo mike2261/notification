@@ -65,8 +65,10 @@
 	},
 	// The 1-minute flush (design.md §4.5 step 2). A <1h interval gets 30s CPU,
 	// which is why the flush must stay set-based (§5).
+	// The 1-minute flush plus the hourly sweeper backstop (§4.5 step 4).
+	// scheduled() routes on controller.cron.
 	"triggers": {
-		"crons": ["* * * * *"]
+		"crons": ["* * * * *", "0 * * * *"]
 	},
 	"upload_source_maps": true,
 	// WIF_PRIVATE_KEY and SKELETON_TOKEN are set as dashboard secrets, never in
@@ -95,6 +97,11 @@
 		// Off by default. The skeleton push route mints a GCP token and sends
 		// real pushes; it stays disabled unless someone is actively running §7.0.
 		"SKELETON_ENABLED": "0",
+		// Dark rollout (design.md §8). Off means the send consumer marks every
+		// due notification suppressed_dark AT SEND TIME, so flipping this on
+		// releases nothing retroactively. Ship dark, verify volume and
+		// coalescing against real traffic, then enable for internal parents.
+		"PUSH_ENABLED": "0",
 		// --- FILL IN once robo-worker's auth migration (design.md §1.4) ships its
 		// JWKS endpoint. Until then these are placeholders — the parent API will
 		// 401 every request in production, which is the correct failure mode for
@@ -140,6 +147,7 @@
 				"FCM_PROJECT_ID": "test-firebase-project",
 				"SKELETON_ENABLED": "1",
 				"SKELETON_TOKEN": "test-skeleton-token",
+				"PUSH_ENABLED": "1",
 				"PARENT_JWKS_URL": "https://robo-worker.test/auth/jwks",
 				"PARENT_JWT_ISSUER": "https://robo-worker.test",
 				"PARENT_JWT_AUDIENCE": "robo-worker/parent"
