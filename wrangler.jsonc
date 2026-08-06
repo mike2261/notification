@@ -101,24 +101,36 @@
 		// due notification suppressed_dark AT SEND TIME, so flipping this on
 		// releases nothing retroactively. Ship dark, verify volume and
 		// coalescing against real traffic, then enable for internal parents.
-		"PUSH_ENABLED": "0",
+		// TEMPORARILY "1" for the first end-to-end verification run (design.md
+		// §7.4). Back to "0" once a push is confirmed on a handset, and it stays
+		// there through the dark period §8 asks for.
+		"PUSH_ENABLED": "1",
 		// The e2e injection surface (design.md §7.4, src/routes/e2e.ts). Off by
 		// default: while it is "1", anyone holding E2E_TOKEN can fabricate
 		// progress moments for real parents. Flip it on for a verification run,
 		// flip it back after.
-		"E2E_ENABLED": "0",
+		"E2E_ENABLED": "1",
 		// Delivered by robo-worker's auth migration (design.md §1.4,
 		// docs/handoff-robo-worker-auth.md). Its /auth/jwks now serves the
 		// dedicated parent-session ES256 key alongside its WIF key; our verifier
 		// looks up by `kid` and ignores the one it doesn't recognise. The issuer
 		// is the same origin, because that is the origin serving the JWKS.
 		//
-		// NOTE: these go live only once robo-worker's ES256 rollout is DEPLOYED.
-		// Until then it still mints HS256 sessions, which src/auth/parent-jwt.ts
-		// rejects before it ever fetches the JWKS — a 401, which is the correct
-		// failure mode for "the upstream contract isn't live yet".
-		"PARENT_JWKS_URL": "https://robo-worker.taskfi.workers.dev/auth/jwks",
-		"PARENT_JWT_ISSUER": "https://robo-worker.taskfi.workers.dev",
+		// POINTED AT THE STAGING robo-worker, not taskfi's production one.
+		//
+		// Cloudflare Queues are account-scoped: taskfi's robo-worker can never
+		// bind `tuni-noti-events`, which lives in THIS account. So robo-worker
+		// runs here too (robo-worker.anhduc22601.workers.dev, its own empty
+		// D1/DO — a parallel stack, not a migration), and that deployment is
+		// what mints the parent sessions this service verifies. Its
+		// PARENT_SESSION_ISSUER is the same origin, because that is the origin
+		// serving the JWKS.
+		//
+		// Repoint both values the day robo-worker's production account and
+		// tuni-noti's are the same one. They must move together: the issuer and
+		// the JWKS origin are the same string on purpose.
+		"PARENT_JWKS_URL": "https://robo-worker.anhduc22601.workers.dev/auth/jwks",
+		"PARENT_JWT_ISSUER": "https://robo-worker.anhduc22601.workers.dev",
 		// Real, known value from design.md §1.4 — not a placeholder.
 		"PARENT_JWT_AUDIENCE": "robo-worker/parent"
 	},
