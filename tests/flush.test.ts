@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import { getDb } from "../src/datastore/d1/schema";
-import { flushDueWindows } from "../src/flush/flush";
+import { DEFAULT_WINDOWS, flushDueWindows, windowsFromEnv } from "../src/flush/flush";
 
 const NOW = new Date("2026-08-07T12:00:00.000Z");
 const minutesAgo = (n: number) => new Date(NOW.getTime() - n * 60_000).toISOString();
@@ -275,5 +275,22 @@ describe("flushDueWindows — query budget (design.md §5.1, §7 step 1b)", () =
     await flushDueWindows(env.NOTI_D1, NOW);
     const db = getDb(env.NOTI_D1);
     expect(await db.selectFrom("coalesce_events").selectAll().execute()).toHaveLength(0);
+  });
+});
+
+describe("windowsFromEnv", () => {
+  it("falls back to the design defaults when nothing is set", () => {
+    expect(windowsFromEnv({})).toEqual(DEFAULT_WINDOWS);
+  });
+
+  it("reads an override, so a demo can watch the pipeline without a 10-minute wait", () => {
+    expect(windowsFromEnv({ FLUSH_CHILD_QUIET_MS: "30000" }).childQuietMs).toBe(30_000);
+  });
+
+  it("ignores a malformed or non-positive value rather than taking the cron down", () => {
+    // A typo in a var must not stop every notification in the service.
+    expect(windowsFromEnv({ FLUSH_CHILD_QUIET_MS: "soon" })).toEqual(DEFAULT_WINDOWS);
+    expect(windowsFromEnv({ FLUSH_CHILD_QUIET_MS: "0" })).toEqual(DEFAULT_WINDOWS);
+    expect(windowsFromEnv({ FLUSH_CHILD_QUIET_MS: "-1" })).toEqual(DEFAULT_WINDOWS);
   });
 });

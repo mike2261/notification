@@ -23,6 +23,47 @@ const CHILD_HARD_CAP_MS = 30 * 60_000;
 const PARENT_QUIET_MS = 5 * 60_000;
 const PARENT_HARD_CAP_MS = 15 * 60_000;
 
+export type WindowConfig = {
+  childQuietMs: number;
+  childHardCapMs: number;
+  parentQuietMs: number;
+  parentHardCapMs: number;
+};
+
+export const DEFAULT_WINDOWS: WindowConfig = {
+  childQuietMs: CHILD_QUIET_MS,
+  childHardCapMs: CHILD_HARD_CAP_MS,
+  parentQuietMs: PARENT_QUIET_MS,
+  parentHardCapMs: PARENT_HARD_CAP_MS,
+};
+
+/**
+ * Window overrides, for demos and for tuning without a code change.
+ *
+ * These are product timings, not correctness invariants — the flush is correct
+ * at any window; only the merge quality changes. What a short window costs is
+ * exactly what coalescing buys: at 30 seconds, three events from one sitting
+ * become three pushes instead of one, which is the notification fatigue §4.5
+ * exists to prevent. Shorten it to SHOW the pipeline, never to run it.
+ *
+ * A malformed or non-positive value falls back to the design default rather
+ * than throwing: a typo in a var must not take the flush cron down.
+ */
+export function windowsFromEnv(env: Record<string, unknown>): WindowConfig {
+  const read = (name: string, fallback: number): number => {
+    const raw = env[name];
+    if (typeof raw !== "string") return fallback;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  };
+  return {
+    childQuietMs: read("FLUSH_CHILD_QUIET_MS", CHILD_QUIET_MS),
+    childHardCapMs: read("FLUSH_CHILD_HARD_CAP_MS", CHILD_HARD_CAP_MS),
+    parentQuietMs: read("FLUSH_PARENT_QUIET_MS", PARENT_QUIET_MS),
+    parentHardCapMs: read("FLUSH_PARENT_HARD_CAP_MS", PARENT_HARD_CAP_MS),
+  };
+}
+
 /**
  * Page size. `json_each(?)` binds ONE parameter regardless of page size,
  * which is why the set-based form is mandatory rather than merely neater: D1
@@ -168,14 +209,26 @@ function toMember(row: MembershipRow): WindowMember {
   };
 }
 
-export async function flushDueWindows(d1: D1Database, now: Date = new Date()): Promise<number> {
+export async function flushDueWindows(
+  d1: D1Database,
+  now: Date = new Date(),
+  // `config`, not `windows` — the local `windows` below is the due-window
+  // membership map, and one of those names has to give.
+  config: WindowConfig = DEFAULT_WINDOWS,
+): Promise<number> {
   const at = now.getTime();
   const iso = (ms: number) => new Date(at - ms).toISOString();
 
   // (1) Due windows AND their full membership — one pass, one query.
   const { results: membership } = await d1
     .prepare(DUE_WINDOWS_SQL)
-    .bind(iso(CHILD_QUIET_MS), iso(CHILD_HARD_CAP_MS), iso(PARENT_QUIET_MS), iso(PARENT_HARD_CAP_MS), PAGE_SIZE)
+    .bind(
+      iso(config.childQuietMs),
+      iso(config.childHardCapMs),
+      iso(config.parentQuietMs),
+      iso(config.parentHardCapMs),
+      PAGE_SIZE,
+    )
     .all<MembershipRow>();
 
   if (membership.length === 0) return 0;

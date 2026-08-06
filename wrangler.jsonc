@@ -121,6 +121,18 @@
 		// progress moments for real parents. Flip it on for a verification run,
 		// flip it back after.
 		"E2E_ENABLED": "1",
+		// DEMO WINDOWS — not the design values (§4.5 step 1: 10/30 min child,
+		// 5/15 min parent). Nobody watches a demo for ten minutes, so the
+		// coalescing quiet period is cut to 30s and the hard cap to 2 min.
+		//
+		// This trades away exactly what coalescing buys: at 30s, three events
+		// from one sitting become three pushes instead of one. DELETE these four
+		// lines before real parents are on the service — src/flush/flush.ts falls
+		// back to the design defaults the moment they are absent.
+		"FLUSH_CHILD_QUIET_MS": "30000",
+		"FLUSH_CHILD_HARD_CAP_MS": "120000",
+		"FLUSH_PARENT_QUIET_MS": "20000",
+		"FLUSH_PARENT_HARD_CAP_MS": "90000",
 		// Delivered by robo-worker's auth migration (design.md §1.4,
 		// docs/handoff-robo-worker-auth.md). Its /auth/jwks now serves the
 		// dedicated parent-session ES256 key alongside its WIF key; our verifier

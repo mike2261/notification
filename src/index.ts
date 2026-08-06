@@ -3,7 +3,7 @@
 import "./arktype-config";
 import { handleQueueBatch } from "./consumer/handler";
 import { app } from "./fetch";
-import { flushDueWindows, flushQuietEndCatchup } from "./flush/flush";
+import { flushDueWindows, flushQuietEndCatchup, windowsFromEnv } from "./flush/flush";
 import { type SendEnv, sendBatchJobs } from "./send/consumer";
 import { enqueueScheduled, type SendJob } from "./send/enqueue";
 
@@ -50,7 +50,7 @@ export default {
     }
 
     const now = new Date();
-    const count = await flushDueWindows(env.NOTI_D1, now);
+    const count = await flushDueWindows(env.NOTI_D1, now, windowsFromEnv(env as unknown as Record<string, unknown>));
     if (count > 0) console.log(`[flush] rendered ${count} notification(s)`);
 
     // Quiet hours that ended since the last tick: fold each parent's deferred

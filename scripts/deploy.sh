@@ -91,3 +91,10 @@ node scripts/deploy-smoke.mjs "$BASE_URL" "$id" $SMOKE_ARGS
 npx wrangler versions deploy "$id@100%" -y
 # Promoted and healthy — from here on, never auto-revert traffic.
 canary_active=0
+
+# Queue consumer registration is a NON-VERSIONED setting that this versions
+# path does NOT sync (it prints the ones it does: logpush, observability,
+# tail_consumers). The first full deploy of this service passed every smoke
+# with all three queues at zero consumers. Loud failure, after promotion,
+# because the fix is a separate command rather than a rollback.
+node scripts/check-queue-consumers.mjs
