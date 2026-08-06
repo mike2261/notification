@@ -8,3 +8,11 @@ declare namespace Cloudflare {
     TEST_MIGRATIONS: import("cloudflare:test").D1Migration[];
   }
 }
+
+// Vite's import.meta.glob (used by tests/fixtures-contract.test.ts to bundle
+// fixture JSON at build time, since workerd has no host filesystem access).
+// `vite/client` isn't a resolvable types entry here (vite is a transitive dep
+// of vitest, not a direct one), so declare just the shape actually used.
+interface ImportMeta {
+  glob(pattern: string, options?: { eager?: boolean; import?: string }): Record<string, unknown>;
+}

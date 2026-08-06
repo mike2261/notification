@@ -1,0 +1,9 @@
+{
+  "specVersion": "2.0",
+  "eventId": "chi_1:deleted",
+  "type": "identity.child.deleted",
+  "occurredAt": "2026-08-04T10:00:00Z",
+  "producer": "robo-worker",
+  "subject": { "parentId": "par_1", "childId": "chi_1", "childName": "An" },
+  "data": {}
+}

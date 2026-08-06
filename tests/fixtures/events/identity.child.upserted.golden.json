@@ -1,0 +1,9 @@
+{
+  "specVersion": "1.0",
+  "eventId": "chi_1:upserted:2026-08-04T10:00:00Z",
+  "type": "identity.child.upserted",
+  "occurredAt": "2026-08-04T10:00:00Z",
+  "producer": "robo-worker",
+  "subject": { "parentId": "par_1", "childId": "chi_1", "childName": "An" },
+  "data": { "name": "An", "age": 6, "stage": "A1" }
+}
