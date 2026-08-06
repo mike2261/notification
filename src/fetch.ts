@@ -5,6 +5,7 @@ import { type FcmEnv, sendOne } from "./fcm/client";
 import { extractBearer } from "./hxxp/bearer";
 import { AppError, appErrorToBody, wrapError } from "./hxxp/error";
 import { validate } from "./hxxp/validator";
+import { parentApp } from "./routes/parent";
 
 export type AppContext = {
   Bindings: Env;
@@ -25,6 +26,8 @@ export const appOnError: ErrorHandler<AppContext> = (err, c) => {
 };
 
 app.onError(appOnError);
+
+app.route("/v1/me", parentApp);
 
 // --- Routes ---
 
