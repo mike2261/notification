@@ -63,6 +63,11 @@
 			{ "queue": "tuni-noti-send", "binding": "SEND_QUEUE" }
 		]
 	},
+	// The 1-minute flush (design.md §4.5 step 2). A <1h interval gets 30s CPU,
+	// which is why the flush must stay set-based (§5).
+	"triggers": {
+		"crons": ["* * * * *"]
+	},
 	"upload_source_maps": true,
 	// WIF_PRIVATE_KEY and SKELETON_TOKEN are set as dashboard secrets, never in
 	// this file. keep_vars stops a deploy from wiping them. Everything in the

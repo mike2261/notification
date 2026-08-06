@@ -3,6 +3,7 @@
 import "./arktype-config";
 import { handleQueueBatch } from "./consumer/handler";
 import { app } from "./fetch";
+import { flushDueWindows } from "./flush/flush";
 
 // Static import, no lazy-load boundary. robo-worker's dynamic-import gymnastics
 // exist to dodge deploy-validator error 10021 on a much larger dependency
@@ -16,5 +17,11 @@ export default {
     // (design.md §5.3), not because its events need different handling at
     // the inbox stage. The send queue is Part 3 of this plan series.
     await handleQueueBatch(env.NOTI_D1, batch);
+  },
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    // The 1-minute flush. Part 3 adds the hourly sweeper and the retention
+    // sweeps on their own cron expressions, routed by controller.cron.
+    const count = await flushDueWindows(env.NOTI_D1);
+    if (count > 0) console.log(`[flush] rendered ${count} notification(s)`);
   },
 } satisfies ExportedHandler<Env>;

@@ -31,7 +31,10 @@ describe("dedupeKeyFor (design.md §4.5 step 2)", () => {
 
   it("breaks ties within one batch by event_id", () => {
     const same = "2026-08-07T10:00:00.000Z";
-    const key = dedupeKeyFor([member({ eventId: "zzz", arrivedAt: same }), member({ eventId: "aaa", arrivedAt: same })]);
+    const key = dedupeKeyFor([
+      member({ eventId: "zzz", arrivedAt: same }),
+      member({ eventId: "aaa", arrivedAt: same }),
+    ]);
     expect(key).toBe("chi_1:aaa");
   });
 
