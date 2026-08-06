@@ -99,13 +99,17 @@ describe("POST /v1/_test/emit", () => {
     // A disabled route must be indistinguishable from a route that does not
     // exist — same reasoning as the skeleton gate in fetch.ts. Returning 401
     // here would advertise the surface to anyone probing production.
-    const original = env.E2E_ENABLED;
-    env.E2E_ENABLED = "0";
+    // `wrangler types` narrows E2E_ENABLED to the literal "1" it finds in
+    // env.test's vars, so flipping it needs a widening cast — the runtime
+    // value is an ordinary string.
+    const mutable = env as unknown as { E2E_ENABLED: string };
+    const original = mutable.E2E_ENABLED;
+    mutable.E2E_ENABLED = "0";
     try {
       const res = await emit({ events: [starEvent("e2e_6:star_awarded")] });
       expect(res.status).toBe(404);
     } finally {
-      env.E2E_ENABLED = original;
+      mutable.E2E_ENABLED = original;
     }
   });
 });

@@ -16,6 +16,20 @@ export type ParentAuthEnv = {
   PARENT_JWKS_URL: string;
   PARENT_JWT_ISSUER: string;
   PARENT_JWT_AUDIENCE: string;
+  /**
+   * Optional service binding to the Worker serving PARENT_JWKS_URL.
+   *
+   * REQUIRED whenever that Worker sits on the SAME `*.workers.dev` subdomain
+   * as this one: a plain `fetch()` to a sibling workers.dev hostname in the
+   * same account does not reach the target Worker — it answers 404, while the
+   * very same URL fetched from anywhere else answers 200. That failure looks
+   * exactly like a misconfigured JWKS path, which is how it costs an hour.
+   *
+   * Left undefined when the two services are on different accounts (the
+   * arrangement design.md §1.4 assumes), where the URL fetch is the only
+   * option and works fine. Code keeps both paths for that reason.
+   */
+  PARENT_JWKS_SERVICE?: Fetcher;
 };
 
 type Jwk = { kty: string; crv: string; x: string; y: string; kid: string };
@@ -24,7 +38,12 @@ let jwksCache: Jwk[] | null = null;
 let jwksInflight: Promise<Jwk[]> | null = null;
 
 async function fetchJwks(env: ParentAuthEnv): Promise<Jwk[]> {
-  const resp = await fetch(env.PARENT_JWKS_URL);
+  // The URL is the single source of truth for the path either way: a service
+  // binding routes by binding, not by hostname, so it takes the same URL and
+  // simply ignores the host part.
+  const resp = env.PARENT_JWKS_SERVICE
+    ? await env.PARENT_JWKS_SERVICE.fetch(env.PARENT_JWKS_URL)
+    : await fetch(env.PARENT_JWKS_URL);
   if (!resp.ok) throw new Error(`parent-jwt: JWKS fetch failed ${resp.status}`);
   const body = (await resp.json()) as { keys?: Jwk[] };
   if (!Array.isArray(body.keys)) throw new Error("parent-jwt: JWKS response missing keys[]");

@@ -34,6 +34,17 @@
 	// NOTI_QUEUE / NOTI_WEEKLY_QUEUE: this Worker only consumes (robo-worker
 	// produces, out of scope here). SEND_QUEUE: internal to this Worker — the
 	// flush cron produces, a send consumer consumes (design.md §1.2, §4.5, §4.6).
+	// robo-worker's /auth/jwks, reached by BINDING rather than by URL.
+	//
+	// Required because both Workers now sit on the same *.workers.dev
+	// subdomain: a plain fetch() from one to a sibling in the same account
+	// answers 404 and never reaches the target, while the identical URL fetched
+	// from anywhere else answers 200. src/auth/parent-jwt.ts still falls back to
+	// the URL when this binding is absent — that is the cross-account
+	// arrangement design.md §1.4 assumes.
+	"services": [
+		{ "binding": "PARENT_JWKS_SERVICE", "service": "robo-worker" }
+	],
 	"queues": {
 		"consumers": [
 			{

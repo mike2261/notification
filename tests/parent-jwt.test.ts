@@ -144,6 +144,41 @@ describe("verifyParentJwt", () => {
     await expect(verifyParentJwt(ENV, jwt)).rejects.toThrow(/iss mismatch/);
   });
 
+  it("fetches the JWKS through the service binding when one is bound", async () => {
+    // Not a preference: a plain fetch to a sibling Worker on the SAME
+    // *.workers.dev subdomain answers 404 instead of reaching it, so when both
+    // services share an account the binding is the only path that works. The
+    // global fetch stub below is the failure that regression would produce.
+    const { privateKey, publicKey } = await makeKeyPair();
+    const jwk = await jwkFromPublicKey(publicKey, "k_svc");
+    vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 }));
+
+    let seenUrl = "";
+    const env = {
+      ...ENV,
+      PARENT_JWKS_SERVICE: {
+        fetch: async (url: string) => {
+          seenUrl = url;
+          return new Response(JSON.stringify({ keys: [jwk] }), { status: 200 });
+        },
+      } as unknown as Fetcher,
+    };
+
+    const now = Math.floor(Date.now() / 1000);
+    const jwt = await signJwt(privateKey, "k_svc", {
+      sub: "par_1",
+      iss: ENV.PARENT_JWT_ISSUER,
+      aud: ENV.PARENT_JWT_AUDIENCE,
+      iat: now,
+      exp: now + 3600,
+    });
+
+    await expect(verifyParentJwt(env, jwt)).resolves.toMatchObject({ parentId: "par_1" });
+    // The URL stays the source of truth for the PATH — a binding routes by
+    // binding and ignores the host.
+    expect(seenUrl).toBe(ENV.PARENT_JWKS_URL);
+  });
+
   it("rejects a non-ES256 alg without attempting verification (no algorithm negotiation)", async () => {
     const now = Math.floor(Date.now() / 1000);
     const header = { alg: "none", typ: "JWT", kid: "k1" };
