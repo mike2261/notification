@@ -1,5 +1,16 @@
 # Handoff: robo-worker auth migration for tuni-noti's Parent API
 
+> **STATUS 2026-08-07 — steps 1–3 are BUILT** on robo-worker branch
+> `feat/noti-producer-auth` (`src/auth/parent-key.ts`, ES256 minting + dual verification in
+> `src/auth/parent.ts`, both keys served on `/auth/jwks`). Step 4 (dropping HS256) is scheduled in
+> robo-worker's `docs/superpowers/plans/2026-08-08-drop-hs256-parent-sessions.md` for 24 h after that
+> deploys. The two values below are now filled into `wrangler.jsonc`.
+>
+> **Still required before this works end to end:** an operator must run
+> `node scripts/gen-parent-key.mjs` in robo-worker and
+> `wrangler secret put PARENT_SESSION_PRIVATE_KEY`, then deploy. Until that deploy, robo-worker still
+> mints HS256 and this service's verifier correctly 401s.
+
 **For:** whoever picks up `docs/design.md` §1.4 / §6 step 3 in the **robo-worker** repo.
 **Status of the other side (tuni-noti):** verification code is built and tested (PR introducing
 `src/auth/parent-jwt.ts` + `src/routes/parent.ts`). It currently 401s every request in production because
@@ -70,7 +81,10 @@ Two values, to fill in `wrangler.jsonc`'s currently-placeholder `PARENT_JWKS_URL
 (top-level `vars` block, marked with a `FILL IN` comment):
 
 - `PARENT_JWKS_URL` — the full URL to robo-worker's `/auth/jwks` in production.
+  **Delivered:** `https://robo-worker.taskfi.workers.dev/auth/jwks`
 - `PARENT_JWT_ISSUER` — the exact `iss` value robo-worker's parent session JWTs carry.
+  **Delivered:** `https://robo-worker.taskfi.workers.dev` (robo-worker's `PARENT_SESSION_ISSUER` var —
+  the same origin as its `WIF_ISSUER`, because that is the origin serving the JWKS).
 
 `PARENT_JWT_AUDIENCE` is already set (`"robo-worker/parent"`) and doesn't need anything from you.
 
