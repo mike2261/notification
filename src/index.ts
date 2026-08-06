@@ -3,7 +3,7 @@
 import "./arktype-config";
 import { handleQueueBatch } from "./consumer/handler";
 import { app } from "./fetch";
-import { flushDueWindows } from "./flush/flush";
+import { flushDueWindows, flushQuietEndCatchup } from "./flush/flush";
 
 // Static import, no lazy-load boundary. robo-worker's dynamic-import gymnastics
 // exist to dodge deploy-validator error 10021 on a much larger dependency
@@ -23,5 +23,9 @@ export default {
     // sweeps on their own cron expressions, routed by controller.cron.
     const count = await flushDueWindows(env.NOTI_D1);
     if (count > 0) console.log(`[flush] rendered ${count} notification(s)`);
+    // Quiet hours that ended since the last tick: fold each parent's deferred
+    // rows into one catch-up push rather than releasing them individually.
+    const catchup = await flushQuietEndCatchup(env.NOTI_D1);
+    if (catchup > 0) console.log(`[flush] folded ${catchup} quiet-end catch-up push(es)`);
   },
 } satisfies ExportedHandler<Env>;

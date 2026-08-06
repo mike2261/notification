@@ -10,6 +10,9 @@
 // query count per tick is a small CONSTANT: one for due windows + their
 // membership, one for render context, one batch of two or three statements.
 
+import { uuidV7 } from "../utils/uuid";
+import { applyCapOutcome, decideGates, type ParentPrefs } from "./gates";
+import { localDate } from "./localtime";
 import { type RenderContext, type RenderedNotification, renderWindow, type WindowMember } from "./render";
 
 // §4.5 step 1. Child scope is the learning session; parent scope is the
@@ -50,12 +53,43 @@ SELECT ce.event_id, ce.window_key, ce.scope, ce.child_id, ce.parent_id,
 // One query for the whole page's render context. LEFT JOIN because the mirror
 // may have no row yet (§4.8 rule 1 — the envelope name is the fallback, and
 // an event is never unrenderable).
+// preferences is LEFT JOINed too — a parent who has never opened the app has
+// no row, and gates.ts falls back to permissive schema defaults.
 const RENDER_CONTEXT_SQL = `
 SELECT c.child_id, c.name AS child_name, c.deleted_at,
-       p.parent_id, p.timezone, p.locale
+       p.parent_id, p.timezone, p.locale,
+       pr.quiet_start, pr.quiet_end, pr.daily_cap,
+       pr.progress_enabled, pr.weekly_enabled
   FROM parents p
   LEFT JOIN children c ON c.parent_id = p.parent_id
+  LEFT JOIN preferences pr ON pr.parent_id = p.parent_id
  WHERE p.parent_id IN (SELECT value FROM json_each(?1))`;
+
+/**
+ * The whole page's cap reservation in ONE statement (design.md §4.5 step 3).
+ *
+ * `RETURNING parent_id` names exactly the parents that won their slots; every
+ * other parent in the page is refused WHOLE — `want` is that parent's entire
+ * notification count for the page, so a partial fill would make *which child
+ * gets through* depend on scan order.
+ *
+ * The comparison is against `caps.daily_cap`, SNAPSHOTTED on the day's first
+ * write, not the live preferences row: one bound parameter cannot express a
+ * page's worth of different limits, and snapshotting also gives the right
+ * behaviour when a parent edits their cap mid-day (the new limit applies from
+ * tomorrow rather than retroactively re-judging what was already sent).
+ */
+const RESERVE_CAPS_SQL = `
+INSERT INTO caps (parent_id, local_date, daily_cap, sent_count)
+SELECT json_extract(value,'$.parent_id'), json_extract(value,'$.local_date'),
+       json_extract(value,'$.cap'),       json_extract(value,'$.want')
+  FROM json_each(?1)
+ -- the first write of the day still has to respect the cap
+ WHERE json_extract(value,'$.want') <= json_extract(value,'$.cap')
+ON CONFLICT (parent_id, local_date) DO UPDATE
+   SET sent_count = caps.sent_count + excluded.sent_count
+ WHERE caps.sent_count + excluded.sent_count <= caps.daily_cap
+RETURNING parent_id`;
 
 // Multi-row insert; robo-worker's own idiom. OR IGNORE is what makes two
 // overlapping ticks safe: the loser hits the UNIQUE dedupe_key and no-ops.
@@ -70,7 +104,7 @@ SELECT json_extract(value, '$.id'),
        json_extract(value, '$.body'),
        json_extract(value, '$.data_json'),
        json_extract(value, '$.scheduled_for'),
-       'scheduled',
+       json_extract(value, '$.state'),
        json_extract(value, '$.dedupe_key')
   FROM json_each(?1)`;
 
@@ -114,6 +148,11 @@ type ContextRow = {
   parent_id: string;
   timezone: string;
   locale: string;
+  quiet_start: string | null;
+  quiet_end: string | null;
+  daily_cap: number | null;
+  progress_enabled: number | null;
+  weekly_enabled: number | null;
 };
 
 function toMember(row: MembershipRow): WindowMember {
@@ -167,7 +206,6 @@ export async function flushDueWindows(d1: D1Database, now: Date = new Date()): P
   const rendered: RenderedNotification[] = [];
   const deletePairs: Array<{ event_id: string; notification_id: string }> = [];
   const tombstonedEventIds: string[] = [];
-  const scheduledFor = new Date(at).toISOString();
 
   for (const members of windows.values()) {
     const first = members[0];
@@ -194,9 +232,38 @@ export async function flushDueWindows(d1: D1Database, now: Date = new Date()): P
     }
   }
 
-  // (4) One batch for the whole page — a constant number of statements, not
+  // (4) Preference gates (§4.5 step 3), then the whole page's cap reservation
+  // in ONE statement. The cap runs BEFORE the notification insert so the
+  // outcome is known when the rows are written — that is what lets the INSERT
+  // share a batch with the DELETE instead of needing a read-decide-write
+  // round trip per window.
+  const prefsByParent = new Map<string, ParentPrefs>();
+  for (const [parentId, row] of contextByParent) {
+    prefsByParent.set(parentId, {
+      timezone: row.timezone,
+      quietStart: row.quiet_start,
+      quietEnd: row.quiet_end,
+      dailyCap: row.daily_cap ?? 10,
+      progressEnabled: row.progress_enabled !== 0,
+      weeklyEnabled: row.weekly_enabled !== 0,
+    });
+  }
+
+  const { decisions, capRequests } = decideGates(rendered, prefsByParent, now);
+
+  let winners: Set<string> = new Set();
+  if (capRequests.length > 0) {
+    const { results } = await d1
+      .prepare(RESERVE_CAPS_SQL)
+      .bind(JSON.stringify(capRequests))
+      .all<{ parent_id: string }>();
+    winners = new Set(results.map((r) => r.parent_id));
+  }
+  const finalDecisions = applyCapOutcome(decisions, winners);
+
+  // (5) One batch for the whole page — a constant number of statements, not
   // two per window.
-  const notificationDocs = rendered.map((n) => ({
+  const notificationDocs = finalDecisions.map(({ notification: n, state, scheduledFor }) => ({
     id: n.id,
     parent_id: n.parentId,
     child_id: n.childId,
@@ -205,6 +272,7 @@ export async function flushDueWindows(d1: D1Database, now: Date = new Date()): P
     body: n.body,
     data_json: n.dataJson,
     scheduled_for: scheduledFor,
+    state,
     dedupe_key: n.dedupeKey,
   }));
 
@@ -218,4 +286,89 @@ export async function flushDueWindows(d1: D1Database, now: Date = new Date()): P
   await d1.batch(statements);
 
   return rendered.length;
+}
+
+// --- quiet-end catch-up (design.md §4.5 step 3) -------------------------
+
+const DUE_DEFERRED_SQL = `
+SELECT n.id, n.parent_id, n.child_id, n.title, n.body, n.scheduled_for, p.timezone
+  FROM notifications n
+  LEFT JOIN parents p ON p.parent_id = n.parent_id
+ WHERE n.state = 'deferred_quiet' AND n.scheduled_for <= ?1
+ ORDER BY n.parent_id, n.scheduled_for
+ LIMIT ?2`;
+
+const INSERT_CATCHUP_SQL = INSERT_NOTIFICATIONS_SQL;
+
+// The folded rows flip to `canceled` in the SAME batch as the catch-up
+// insert, so they cannot also send individually (design.md §4.5 step 3).
+const CANCEL_FOLDED_SQL = `
+UPDATE notifications SET state = 'canceled'
+ WHERE id IN (SELECT value FROM json_each(?1))
+   AND state = 'deferred_quiet'`;
+
+type DeferredRow = {
+  id: string;
+  parent_id: string;
+  child_id: string | null;
+  title: string;
+  body: string;
+  scheduled_for: string;
+  timezone: string | null;
+};
+
+/**
+ * Folds each parent's due `deferred_quiet` rows into ONE catch-up push
+ * (design.md §4.5 step 3). Without this, a parent whose quiet hours held back
+ * six notifications gets six pushes the moment the window ends — precisely
+ * the fatigue quiet hours exist to prevent.
+ *
+ * `dedupe_key = '{parentId}:catchup:{local_date}'` makes overlapping ticks
+ * safe the same way the main flush's key does: the loser's INSERT no-ops, and
+ * because the cancel is keyed on the folded ids rather than on the catch-up
+ * row existing, the fold is idempotent either way.
+ */
+export async function flushQuietEndCatchup(d1: D1Database, now: Date = new Date()): Promise<number> {
+  const { results: due } = await d1.prepare(DUE_DEFERRED_SQL).bind(now.toISOString(), PAGE_SIZE).all<DeferredRow>();
+
+  if (due.length === 0) return 0;
+
+  const byParent = new Map<string, DeferredRow[]>();
+  for (const row of due) {
+    const existing = byParent.get(row.parent_id);
+    if (existing) existing.push(row);
+    else byParent.set(row.parent_id, [row]);
+  }
+
+  const catchupDocs: Array<Record<string, unknown>> = [];
+  const foldedIds: string[] = [];
+
+  for (const [parentId, rows] of byParent) {
+    const timezone = rows[0].timezone ?? "Asia/Ho_Chi_Minh";
+    const local_date = localDate(now, timezone);
+    const count = rows.length;
+
+    catchupDocs.push({
+      id: uuidV7(),
+      parent_id: parentId,
+      // A catch-up spans whatever children were deferred, so it belongs to
+      // the parent, not to one child.
+      child_id: null,
+      kind: "catchup",
+      title: "Cập nhật từ Tuni",
+      body: count === 1 ? rows[0].body : `Bé có ${count} cập nhật mới trong lúc bạn đang bật giờ yên tĩnh.`,
+      data_json: JSON.stringify({ foldedCount: count, foldedIds: rows.map((r) => r.id) }),
+      scheduled_for: now.toISOString(),
+      state: "scheduled",
+      dedupe_key: `${parentId}:catchup:${local_date}`,
+    });
+    for (const row of rows) foldedIds.push(row.id);
+  }
+
+  await d1.batch([
+    d1.prepare(INSERT_CATCHUP_SQL).bind(JSON.stringify(catchupDocs)),
+    d1.prepare(CANCEL_FOLDED_SQL).bind(JSON.stringify(foldedIds)),
+  ]);
+
+  return catchupDocs.length;
 }
