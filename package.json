@@ -19,7 +19,8 @@
   },
   "dependencies": {
     "arktype": "^2.2.0",
-    "hono": "^4.12.12"
+    "hono": "^4.12.12",
+    "kysely": "^0.28.17"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.6",

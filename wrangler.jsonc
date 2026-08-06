@@ -23,6 +23,14 @@
 	"observability": {
 		"enabled": true
 	},
+	"d1_databases": [
+		{
+			"binding": "NOTI_D1",
+			"database_name": "tuni-noti-d1",
+			"database_id": "fbe5ef27-123a-440c-9a47-93895c585840",
+			"migrations_dir": "migrations"
+		}
+	],
 	"upload_source_maps": true,
 	// WIF_PRIVATE_KEY and SKELETON_TOKEN are set as dashboard secrets, never in
 	// this file. keep_vars stops a deploy from wiping them. Everything in the
@@ -58,6 +66,14 @@
 			"version_metadata": {
 				"binding": "CF_VERSION_METADATA"
 			},
+			"d1_databases": [
+				{
+					"binding": "NOTI_D1",
+					"database_name": "tuni-noti-d1-test",
+					"database_id": "00000000-0000-0000-0000-000000000000",
+					"migrations_dir": "migrations"
+				}
+			],
 			"vars": {
 				"WIF_ISSUER": "https://tuni-noti.test",
 				"WIF_SUBJECT": "tuni-noti",
