@@ -5,6 +5,7 @@ import { type FcmEnv, sendOne } from "./fcm/client";
 import { extractBearer } from "./hxxp/bearer";
 import { AppError, appErrorToBody, wrapError } from "./hxxp/error";
 import { validate } from "./hxxp/validator";
+import { e2eApp } from "./routes/e2e";
 import { parentApp } from "./routes/parent";
 
 export type AppContext = {
@@ -28,6 +29,9 @@ export const appOnError: ErrorHandler<AppContext> = (err, c) => {
 app.onError(appOnError);
 
 app.route("/v1/me", parentApp);
+// Verification-only injection surface (design.md §7.4). Gated OFF in
+// production; see src/routes/e2e.ts for why it is double-gated.
+app.route("/v1/_test", e2eApp);
 
 // --- Routes ---
 

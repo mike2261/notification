@@ -8,7 +8,7 @@
 // share one database, so per-message round trips are the exact contention
 // pattern it handles worst.
 
-import { parseEnvelope } from "./parse";
+import { type ParseResult, parseEnvelope } from "./parse";
 import { planBatch } from "./plan";
 
 /**
@@ -32,13 +32,27 @@ async function tombstonedChildIds(d1: D1Database, childIds: string[]): Promise<S
   return new Set(results.map((r) => r.child_id));
 }
 
-export async function consumeBatch(d1: D1Database, payloads: unknown[]): Promise<void> {
+/**
+ * `receivedAt` is a parameter, not a `Date.now()` inside: the e2e injection
+ * route (src/routes/e2e.ts) backdates it so a window is already past its
+ * coalescing quiet period, and the queue path simply takes the default. It
+ * stays the CONSUMER's clock either way — never the event's occurredAt
+ * (design.md §4.5 step 2).
+ *
+ * Returns the parse verdicts so a caller that wants them (only the e2e route
+ * does) can report why an event did nothing; the queue path discards them.
+ */
+export async function consumeBatch(
+  d1: D1Database,
+  payloads: unknown[],
+  receivedAt: string = new Date().toISOString(),
+): Promise<ParseResult[]> {
   const results = payloads.map(parseEnvelope);
 
   const childIds = [...new Set(results.flatMap((r) => (r.kind === "ok" ? [r.event.subject.childId] : [])))];
   const tombstoned = await tombstonedChildIds(d1, childIds);
 
-  const planned = planBatch(results, new Date().toISOString(), tombstoned);
+  const planned = planBatch(results, receivedAt, tombstoned);
 
   for (const result of results) {
     if (result.kind === "ok") continue;
@@ -49,10 +63,11 @@ export async function consumeBatch(d1: D1Database, payloads: unknown[]): Promise
     console.log(`[consumer] ${result.kind} eventId=${result.eventId ?? "<unidentifiable>"}`);
   }
 
-  if (planned.length === 0) return;
+  if (planned.length === 0) return results;
 
   const statements = planned.map((s) => d1.prepare(s.sql).bind(...s.params));
   await d1.batch(statements);
+  return results;
 }
 
 export async function handleQueueBatch(d1: D1Database, batch: MessageBatch<unknown>): Promise<void> {

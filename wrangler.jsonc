@@ -102,6 +102,11 @@
 		// releases nothing retroactively. Ship dark, verify volume and
 		// coalescing against real traffic, then enable for internal parents.
 		"PUSH_ENABLED": "0",
+		// The e2e injection surface (design.md §7.4, src/routes/e2e.ts). Off by
+		// default: while it is "1", anyone holding E2E_TOKEN can fabricate
+		// progress moments for real parents. Flip it on for a verification run,
+		// flip it back after.
+		"E2E_ENABLED": "0",
 		// Delivered by robo-worker's auth migration (design.md §1.4,
 		// docs/handoff-robo-worker-auth.md). Its /auth/jwks now serves the
 		// dedicated parent-session ES256 key alongside its WIF key; our verifier
@@ -153,6 +158,8 @@
 				"SKELETON_ENABLED": "1",
 				"SKELETON_TOKEN": "test-skeleton-token",
 				"PUSH_ENABLED": "1",
+				"E2E_ENABLED": "1",
+				"E2E_TOKEN": "test-e2e-token",
 				"PARENT_JWKS_URL": "https://robo-worker.test/auth/jwks",
 				"PARENT_JWT_ISSUER": "https://robo-worker.test",
 				"PARENT_JWT_AUDIENCE": "robo-worker/parent"
