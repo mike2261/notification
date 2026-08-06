@@ -31,6 +31,38 @@
 			"migrations_dir": "migrations"
 		}
 	],
+	// NOTI_QUEUE / NOTI_WEEKLY_QUEUE: this Worker only consumes (robo-worker
+	// produces, out of scope here). SEND_QUEUE: internal to this Worker — the
+	// flush cron produces, a send consumer consumes (design.md §1.2, §4.5, §4.6).
+	"queues": {
+		"consumers": [
+			{
+				"queue": "tuni-noti-events",
+				"max_batch_size": 100,
+				"max_retries": 3,
+				"dead_letter_queue": "tuni-noti-events-dlq"
+			},
+			{
+				"queue": "tuni-noti-weekly",
+				"max_batch_size": 100,
+				"max_retries": 3,
+				"dead_letter_queue": "tuni-noti-weekly-dlq"
+			},
+			{
+				"queue": "tuni-noti-send",
+				"max_batch_size": 100,
+				// Lower than the inbound queues: a send failure is retried by FCM's
+				// own classifier (src/fcm/client.ts) up to the point it's terminal,
+				// so a consumer-level retry storm on top of that just wastes budget
+				// (design.md §4.6, §5.3 "its own retry policy").
+				"max_retries": 2,
+				"dead_letter_queue": "tuni-noti-send-dlq"
+			}
+		],
+		"producers": [
+			{ "queue": "tuni-noti-send", "binding": "SEND_QUEUE" }
+		]
+	},
 	"upload_source_maps": true,
 	// WIF_PRIVATE_KEY and SKELETON_TOKEN are set as dashboard secrets, never in
 	// this file. keep_vars stops a deploy from wiping them. Everything in the
@@ -74,6 +106,18 @@
 					"migrations_dir": "migrations"
 				}
 			],
+			// Distinct queue names from production so local test runs never touch
+			// real Cloudflare queues; vitest-pool-workers simulates them locally.
+			"queues": {
+				"consumers": [
+					{ "queue": "tuni-noti-events-test", "max_batch_size": 100, "max_retries": 3, "dead_letter_queue": "tuni-noti-events-test-dlq" },
+					{ "queue": "tuni-noti-weekly-test", "max_batch_size": 100, "max_retries": 3, "dead_letter_queue": "tuni-noti-weekly-test-dlq" },
+					{ "queue": "tuni-noti-send-test", "max_batch_size": 100, "max_retries": 2, "dead_letter_queue": "tuni-noti-send-test-dlq" }
+				],
+				"producers": [
+					{ "queue": "tuni-noti-send-test", "binding": "SEND_QUEUE" }
+				]
+			},
 			"vars": {
 				"WIF_ISSUER": "https://tuni-noti.test",
 				"WIF_SUBJECT": "tuni-noti",
