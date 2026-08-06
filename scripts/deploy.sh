@@ -17,7 +17,7 @@
 # exist before the provider can be created (docs/walking-skeleton.md §1).
 set -eu
 
-BASE_URL="${BASE_URL:-https://tuni-noti.taskfi.workers.dev}"
+BASE_URL="${BASE_URL:-https://tuni-noti.anhduc22601.workers.dev}"
 SMOKE_ARGS=""
 if [ "${BOOTSTRAP:-0}" = "1" ]; then
   SMOKE_ARGS="--bootstrap"

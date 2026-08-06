@@ -1,0 +1,9 @@
+{
+  "specVersion": "1.0",
+  "eventId": "led_1:challenge_achieved",
+  "type": "learning.challenge.achieved",
+  "occurredAt": "2026-08-04T10:00:00Z",
+  "producer": "robo-worker",
+  "subject": { "parentId": "par_1", "childId": "chi_1", "childName": "An" },
+  "data": { "courseId": "c1", "challengeId": "ch1", "firstTime": true }
+}

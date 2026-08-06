@@ -5,7 +5,7 @@
 // one real handset and print exactly how FCM answered. Nothing else gets built
 // until this prints "accepted".
 const [deviceToken, title, body] = process.argv.slice(2);
-const base = process.env.BASE_URL ?? "https://tuni-noti.taskfi.workers.dev";
+const base = process.env.BASE_URL ?? "https://tuni-noti.anhduc22601.workers.dev";
 const auth = process.env.SKELETON_TOKEN;
 
 if (!deviceToken || !auth) {

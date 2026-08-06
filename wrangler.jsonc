@@ -23,6 +23,46 @@
 	"observability": {
 		"enabled": true
 	},
+	"d1_databases": [
+		{
+			"binding": "NOTI_D1",
+			"database_name": "tuni-noti-d1",
+			"database_id": "fbe5ef27-123a-440c-9a47-93895c585840",
+			"migrations_dir": "migrations"
+		}
+	],
+	// NOTI_QUEUE / NOTI_WEEKLY_QUEUE: this Worker only consumes (robo-worker
+	// produces, out of scope here). SEND_QUEUE: internal to this Worker — the
+	// flush cron produces, a send consumer consumes (design.md §1.2, §4.5, §4.6).
+	"queues": {
+		"consumers": [
+			{
+				"queue": "tuni-noti-events",
+				"max_batch_size": 100,
+				"max_retries": 3,
+				"dead_letter_queue": "tuni-noti-events-dlq"
+			},
+			{
+				"queue": "tuni-noti-weekly",
+				"max_batch_size": 100,
+				"max_retries": 3,
+				"dead_letter_queue": "tuni-noti-weekly-dlq"
+			},
+			{
+				"queue": "tuni-noti-send",
+				"max_batch_size": 100,
+				// Lower than the inbound queues: a send failure is retried by FCM's
+				// own classifier (src/fcm/client.ts) up to the point it's terminal,
+				// so a consumer-level retry storm on top of that just wastes budget
+				// (design.md §4.6, §5.3 "its own retry policy").
+				"max_retries": 2,
+				"dead_letter_queue": "tuni-noti-send-dlq"
+			}
+		],
+		"producers": [
+			{ "queue": "tuni-noti-send", "binding": "SEND_QUEUE" }
+		]
+	},
 	"upload_source_maps": true,
 	// WIF_PRIVATE_KEY and SKELETON_TOKEN are set as dashboard secrets, never in
 	// this file. keep_vars stops a deploy from wiping them. Everything in the
@@ -35,17 +75,18 @@
 		// {WIF_ISSUER}/auth/jwks to verify our self-signed assertions, so this
 		// MUST equal the provider's configured issuer exactly — robo-worker's
 		// provider cannot be reused for precisely this reason (design.md §4.6).
-		"WIF_ISSUER": "https://tuni-noti.taskfi.workers.dev",
+		"WIF_ISSUER": "https://tuni-noti.anhduc22601.workers.dev",
 		"WIF_SUBJECT": "tuni-noti",
 		// STS wants the audience as a "full resource name": leading `//`, no
 		// protocol. The GCP Console shows it with `https://` and the API rejects
 		// that form.
-		"WIF_AUDIENCE": "//iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/providers/PROVIDER_ID",
+		"WIF_AUDIENCE": "//iam.googleapis.com/projects/273162862419/locations/global/workloadIdentityPools/robo-cf-worker-pool/providers/tuni-noti",
 		// Dedicated SA — NOT robo-worker's bridge SA (design.md §4.6 step 3).
-		"FCM_SA_EMAIL": "tuni-noti@PROJECT_ID.iam.gserviceaccount.com",
+		"FCM_SA_EMAIL": "tuni-noti@ai-robotics-496803.iam.gserviceaccount.com",
 		// Firebase project id (the string id, not the number) — it goes straight
-		// into the messages:send path.
-		"FCM_PROJECT_ID": "FIREBASE_PROJECT_ID",
+		// into the messages:send path. Differs from the GCP project the SA lives
+		// in (ai-robotics-496803) — a genuine cross-project setup.
+		"FCM_PROJECT_ID": "robo-tuni-app",
 		// Off by default. The skeleton push route mints a GCP token and sends
 		// real pushes; it stays disabled unless someone is actively running §7.0.
 		"SKELETON_ENABLED": "0"
@@ -56,6 +97,26 @@
 		"test": {
 			"version_metadata": {
 				"binding": "CF_VERSION_METADATA"
+			},
+			"d1_databases": [
+				{
+					"binding": "NOTI_D1",
+					"database_name": "tuni-noti-d1-test",
+					"database_id": "00000000-0000-0000-0000-000000000000",
+					"migrations_dir": "migrations"
+				}
+			],
+			// Distinct queue names from production so local test runs never touch
+			// real Cloudflare queues; vitest-pool-workers simulates them locally.
+			"queues": {
+				"consumers": [
+					{ "queue": "tuni-noti-events-test", "max_batch_size": 100, "max_retries": 3, "dead_letter_queue": "tuni-noti-events-test-dlq" },
+					{ "queue": "tuni-noti-weekly-test", "max_batch_size": 100, "max_retries": 3, "dead_letter_queue": "tuni-noti-weekly-test-dlq" },
+					{ "queue": "tuni-noti-send-test", "max_batch_size": 100, "max_retries": 2, "dead_letter_queue": "tuni-noti-send-test-dlq" }
+				],
+				"producers": [
+					{ "queue": "tuni-noti-send-test", "binding": "SEND_QUEUE" }
+				]
 			},
 			"vars": {
 				"WIF_ISSUER": "https://tuni-noti.test",
