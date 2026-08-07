@@ -42,11 +42,32 @@ tuni-noti's `E2E_TOKEN`.
 3. **Create a child in the app.** This is a real `identity.child.upserted` on the real queue, and it
    is what makes the push say the child's name instead of falling back to the envelope.
 
-4. **Note the child's id** — the demo trigger takes it:
+4. **Note the child's id, and move it out of `setup`** — the one manual step in the whole demo:
 
    ```sh
    npx wrangler d1 execute robo-d1 -c wrangler.personal.jsonc --remote \
-     --command "SELECT id, name FROM children WHERE parent_id IS NOT NULL"
+     --command "SELECT id, name, stage FROM children WHERE parent_id IS NOT NULL"
+
+   npx wrangler d1 execute robo-d1 -c wrangler.personal.jsonc --remote \
+     --command "UPDATE children SET stage='learning' WHERE id='<CHILD_ID>'"
+   ```
+
+   A child created through the app starts at `stage='setup'`, which arms the first-meeting
+   ASSESSMENT rather than a lesson — the real product flow, and a longer, LLM-driven one that has
+   never been rehearsed. `'learning'` skips to the lesson. Do not let the assessment make its first
+   appearance in front of an audience.
+
+   There is no "pick a course" step, and no parent-facing course chooser: placement puts the child
+   into the only open course whose band covers them. The tutor page's `course id` field pins one by
+   hand and can stay empty.
+
+5. **Clear out earlier demo children.** A lesson someone started and abandoned still coalesces, and
+   its push arrives whenever its window closes — landing in the middle of the demo under the wrong
+   child's name. This happened during the rehearsal.
+
+   ```sh
+   npx wrangler d1 execute robo-d1 -c wrangler.personal.jsonc --remote \
+     --command "DELETE FROM children WHERE name='Test Child'"
    ```
 
 ## The demo
@@ -101,19 +122,36 @@ This is the one that answers "but is it wired to actual learning?". It runs the 
 published course, a Mission Can-do, a judged outcome, `commitFold`, and the events derived from the
 fold's projected outputs — not fabricated ones.
 
+Do it by hand, in the browser — it reads far better than a script:
+
+**`https://robo-worker.anhduc22601.workers.dev/`** → paste the child id → **Connect** → **Start
+Learning** → type two answers:
+
+```
+Hello!
+Hi, I am An. Nice to meet you!
+```
+
+Two turns is enough: the mission's beats are "greet" and "answer a greeting", and the lesson closes
+on the second. Rehearsed on the real stack — `turn 2 → status=completed completed=["greet-1"]`.
+
+The scripted equivalent, if the browser is unavailable:
+
 ```sh
 # in robo-worker, on branch send-noti
 ADMIN_TOKEN=$ADMIN_API_TOKEN ORIGIN=https://robo-worker.anhduc22601.workers.dev \
   node scripts/noti-lesson-e2e.mjs <CHILD_ID> 6
 ```
 
-Six short English answers ("Hello!", "Hi, I am An. Nice to meet you!", …) drive the demo course
-(`tests/fixtures/noti-demo.course.json`: one mission, one review slot, a wrap-up) to completion. The
-fold then publishes **three** events — completion, challenge achieved, star awarded — and tuni-noti
-folds all three into one push:
+Either way the course is `tests/fixtures/noti-demo.course.json` — one mission, one review slot, a
+wrap-up. The fold publishes **three** events — completion, challenge achieved, star awarded — and
+tuni-noti folds all three into one push, on the `tuni_progress` channel, 30–90 seconds later:
 
-> **An vừa học xong!**
-> An hoàn thành 1 bài học, chinh phục 1 thử thách, nhận 1 sao.
+> **Bé An vừa học xong!**
+> Bé An hoàn thành 1 bài học, chinh phục 1 thử thách, nhận 1 sao.
+
+The name comes from the identity mirror Act 1 showed, which is the point of Act 1: two services, one
+child, and neither reads the other's database.
 
 The child must have a `parent_id` first (`/_test/course/bootstrap` does not set one) — an unparented
 child has nobody to notify and publishes nothing, correctly and silently.
