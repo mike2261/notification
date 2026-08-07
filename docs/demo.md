@@ -95,7 +95,34 @@ npx wrangler d1 execute NOTI_D1 --remote \
   --command "SELECT title, body, state FROM notifications ORDER BY rowid DESC LIMIT 1"
 ```
 
-### Act 3 (optional) — the parent is in control
+### Act 3 — a REAL lesson, end to end
+
+This is the one that answers "but is it wired to actual learning?". It runs the course engine: a
+published course, a Mission Can-do, a judged outcome, `commitFold`, and the events derived from the
+fold's projected outputs — not fabricated ones.
+
+```sh
+# in robo-worker, on branch send-noti
+ADMIN_TOKEN=$ADMIN_API_TOKEN ORIGIN=https://robo-worker.anhduc22601.workers.dev \
+  node scripts/noti-lesson-e2e.mjs <CHILD_ID> 6
+```
+
+Six short English answers ("Hello!", "Hi, I am An. Nice to meet you!", …) drive the demo course
+(`tests/fixtures/noti-demo.course.json`: one mission, one review slot, a wrap-up) to completion. The
+fold then publishes **three** events — completion, challenge achieved, star awarded — and tuni-noti
+folds all three into one push:
+
+> **An vừa học xong!**
+> An hoàn thành 1 bài học, chinh phục 1 thử thách, nhận 1 sao.
+
+The child must have a `parent_id` first (`/_test/course/bootstrap` does not set one) — an unparented
+child has nobody to notify and publishes nothing, correctly and silently.
+
+**This cannot be demoed from `wrangler dev`.** A queue producer marked `remote: true` in local dev
+accepts `sendBatch()` and delivers nothing, from the Worker context and from inside the Tutor DO
+alike. A local run looks like a passing integration test and proves nothing.
+
+### Act 4 (optional) — the parent is in control
 
 Preferences are per parent and enforced at flush time, not at send time:
 
@@ -114,10 +141,15 @@ Say these out loud if anyone asks "so it's done?":
   replaces the designed 10 minutes so nobody watches a demo for ten minutes. At the real window the
   same three presses still produce one push; at 30 seconds a genuinely spread-out session would
   produce several. Delete those four vars before real parents arrive.
-- **`emit-progress` fabricates events.** It publishes through the real publisher onto the real queue,
-  so transport and contract are proven — but it does not run `commitFold`, so
-  `buildNotificationEvents` (the actual lesson → event mapping) is proven only by its unit tests.
-  A real lesson needs the LLM/TTS bridges, which need WIF on this account's robo-worker.
+- **`emit-progress` (Act 2) fabricates events.** It publishes through the real publisher onto the
+  real queue, so transport and contract are proven — but it does not run `commitFold`. Act 3 is the
+  one that closes that gap.
+- **The staging worker holds a copy of production's WIF signing key.** Its issuer and audience are
+  hardcoded to taskfi's URL (`src/auth/wif.ts`), so the only way this deployment can reach the
+  LLM/TTS bridges is to sign with the same key, which Google verifies against taskfi's JWKS. Same
+  GCP identity, second holder. Give it its own WIF provider before this stack outlives the demo.
+- **The demo course is one lesson with one mission.** Real courses have teaching, practice and
+  quiz activities whose grading paths this never touches.
 - **`PUSH_ENABLED=1` and `E2E_ENABLED=1` are demo settings.** Design §8 ships dark first: process
   events for days, measure real volume, *then* enable sending. The dark gate is evaluated at send
   time, so turning it back off releases nothing retroactively.
