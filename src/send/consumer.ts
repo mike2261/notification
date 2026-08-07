@@ -38,6 +38,31 @@ SELECT n.id, n.parent_id, n.child_id, n.kind, n.title, n.body, n.data_json, n.st
   LEFT JOIN deliveries d ON d.notification_id = n.id AND d.token = t.token
  WHERE n.id IN (SELECT value FROM json_each(?1))`;
 
+// DEMO ONLY (PUSH_BROADCAST=1). Identical to LOAD_BATCH_SQL except the token
+// join drops `t.parent_id = n.parent_id`, so EVERY enabled device receives
+// EVERY notification regardless of which parent it was rendered for.
+//
+// This exists because the app is temporarily skipping login, so no device can
+// register against a real parent (POST /v1/me/devices needs the parent JWT) and
+// nothing would ever be delivered. It is a demo prop, not a feature:
+//
+//   - It sends one family's child's progress to every registered handset. With
+//     real parents on the service that is a privacy incident, not a bug report.
+//   - It is safe TODAY only because push_tokens holds nothing but hand-inserted
+//     demo devices.
+//
+// DELETE this constant, its branch, and the var the moment login is back.
+const LOAD_BATCH_BROADCAST_SQL = `
+SELECT n.id, n.parent_id, n.child_id, n.kind, n.title, n.body, n.data_json, n.state,
+       c.deleted_at AS child_deleted_at,
+       t.token, t.disabled_at,
+       d.state AS delivery_state
+  FROM notifications n
+  LEFT JOIN children c ON c.child_id = n.child_id
+  LEFT JOIN push_tokens t ON t.disabled_at IS NULL
+  LEFT JOIN deliveries d ON d.notification_id = n.id AND d.token = t.token
+ WHERE n.id IN (SELECT value FROM json_each(?1))`;
+
 const INSERT_DELIVERY_SQL = `
 INSERT OR IGNORE INTO deliveries (notification_id, token, state, attempts, fcm_message_name)
 SELECT json_extract(value,'$.notification_id'), json_extract(value,'$.token'), 'pending', 0, NULL
@@ -84,7 +109,7 @@ type BatchRow = {
 
 type Target = { notificationId: string; token: string };
 
-export type SendEnv = FcmEnv & { NOTI_D1: D1Database; PUSH_ENABLED?: string };
+export type SendEnv = FcmEnv & { NOTI_D1: D1Database; PUSH_ENABLED?: string; PUSH_BROADCAST?: string };
 
 /** Bounded-concurrency map. Six in flight, never more. */
 async function withSlots<T, R>(items: T[], slots: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -106,7 +131,12 @@ export async function sendBatchJobs(env: SendEnv, jobs: SendJob[]): Promise<void
   if (ids.length === 0) return;
 
   const d1 = env.NOTI_D1;
-  const { results: rows } = await d1.prepare(LOAD_BATCH_SQL).bind(JSON.stringify(ids)).all<BatchRow>();
+  const broadcast = env.PUSH_BROADCAST === "1";
+  if (broadcast) console.log("[send] PUSH_BROADCAST is on — every enabled device receives every notification");
+  const { results: rows } = await d1
+    .prepare(broadcast ? LOAD_BATCH_BROADCAST_SQL : LOAD_BATCH_SQL)
+    .bind(JSON.stringify(ids))
+    .all<BatchRow>();
   if (rows.length === 0) return;
 
   const byNotification = new Map<string, BatchRow[]>();
