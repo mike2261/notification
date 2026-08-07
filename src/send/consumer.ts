@@ -280,11 +280,25 @@ function buildMessage(ctx: BatchRow, token: string) {
       // Collapse key per child: a newer progress push REPLACES a stale one on
       // the lock screen rather than stacking (design.md §4.6).
       collapse_key: ctx.child_id ?? ctx.parent_id,
-      tag: ctx.child_id ?? ctx.parent_id,
       ttl: PUSH_TTL,
       priority: "high",
-      // Parents mute channels, not apps.
-      notification: { channel_id: ANDROID_CHANNEL },
+      notification: {
+        // Parents mute channels, not apps.
+        channel_id: ANDROID_CHANNEL,
+        // `tag` belongs to AndroidNotification, NOT to AndroidConfig. FCM HTTP
+        // v1 rejects the whole message with
+        //   INVALID_ARGUMENT: Unknown name "tag" at 'message.android'
+        // and every push fails. It sat one level up until a real handset was
+        // in the loop, because nothing below a live send validates the payload
+        // against Google's schema — the FCM client mocks in the test suite
+        // accept whatever they are handed.
+        //
+        // collapse_key and tag do different jobs and both are wanted: the
+        // collapse key dedupes IN TRANSIT (FCM keeps only the newest undelivered
+        // message per key), the tag dedupes ON SCREEN (a new notification
+        // replaces the one already in the tray).
+        tag: ctx.child_id ?? ctx.parent_id,
+      },
     },
   };
 }

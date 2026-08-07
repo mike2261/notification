@@ -170,6 +170,13 @@ describe("sendBatchJobs — happy path (design.md §4.6)", () => {
     expect(msg.android.collapse_key).toBe("s_chi_shape");
     expect(msg.android.ttl).toBeTruthy();
     expect((msg.android.notification as { channel_id: string }).channel_id).toBeTruthy();
+    // `tag` lives on AndroidNotification, never on AndroidConfig. One level up
+    // and FCM rejects the ENTIRE message with
+    //   INVALID_ARGUMENT: Unknown name "tag" at 'message.android'
+    // — which is how it shipped, because a mocked FCM accepts any shape and
+    // only a real handset ever said no.
+    expect((msg.android.notification as { tag: string }).tag).toBe("s_chi_shape");
+    expect(msg.android.tag).toBeUndefined();
   });
 
   it("never runs more than 6 FCM calls concurrently", async () => {
