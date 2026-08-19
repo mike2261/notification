@@ -72,6 +72,43 @@ function num(value: unknown): number {
   return typeof value === "number" ? value : 0;
 }
 
+/**
+ * How many lesson ids the body names before it stops listing them.
+ *
+ * A window is capped at 30 minutes (§4.5 step 1), so three completed lessons
+ * is already an unusual sitting — but the cap is not about likelihood. An FCM
+ * body is truncated by the platform, and a body that spends its length on a
+ * list has none left for the part a parent actually reads.
+ */
+const MAX_LESSON_IDS = 3;
+
+/**
+ * Lesson IDS, not titles: the title lives in the course manifest, which this
+ * service does not read and the event does not carry (§2 — the envelope is
+ * denormalized on purpose, and adding a title means a contract change plus a
+ * manifest read per fold on the producer). `greet-1` is not friendly copy; it
+ * is, however, honest about which lesson closed, which is what the parent
+ * asked for. Swap it for a title the day the contract carries one.
+ */
+function lessonIdsFrom(members: WindowMember[]): string[] {
+  const ids: string[] = [];
+  for (const m of members) {
+    if (m.kind !== "learning.lesson.completed") continue;
+    const id = m.payload.data.lessonId;
+    // Defensive despite the contract: a renderer that throws takes the whole
+    // flush page down, and this one runs on every window (§5.1).
+    if (typeof id === "string" && id.length > 0 && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+
+function lessonPhrase(count: number, ids: string[]): string {
+  const head = `hoàn thành ${count} bài học`;
+  if (ids.length === 0) return head;
+  const shown = ids.slice(0, MAX_LESSON_IDS).join(", ");
+  return ids.length > MAX_LESSON_IDS ? `${head} (${shown}…)` : `${head} (${shown})`;
+}
+
 function renderProgress(members: WindowMember[], context: RenderContext): RenderedNotification {
   const name = nameFor(members, context);
   const lessons = members.filter((m) => m.kind === "learning.lesson.completed").length;
@@ -80,8 +117,10 @@ function renderProgress(members: WindowMember[], context: RenderContext): Render
     .filter((m) => m.kind === "learning.star.awarded")
     .reduce((sum, m) => sum + num(m.payload.data.totalStars), 0);
 
+  const lessonIds = lessonIdsFrom(members);
+
   const parts: string[] = [];
-  if (lessons > 0) parts.push(`hoàn thành ${lessons} bài học`);
+  if (lessons > 0) parts.push(lessonPhrase(lessons, lessonIds));
   if (challenges > 0) parts.push(`chinh phục ${challenges} thử thách`);
   if (stars > 0) parts.push(`nhận ${stars} sao`);
 
@@ -92,7 +131,7 @@ function renderProgress(members: WindowMember[], context: RenderContext): Render
     kind: "progress",
     title: `${name} vừa học xong!`,
     body: parts.length > 0 ? `${name} ${parts.join(", ")}.` : `${name} vừa có một buổi học mới.`,
-    dataJson: JSON.stringify({ lessons, challenges, stars, eventIds: members.map((m) => m.eventId) }),
+    dataJson: JSON.stringify({ lessons, challenges, stars, lessonIds, eventIds: members.map((m) => m.eventId) }),
     dedupeKey: dedupeKeyFor(members),
   };
 }

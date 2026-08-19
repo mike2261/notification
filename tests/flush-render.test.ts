@@ -159,3 +159,54 @@ describe("renderWindow", () => {
     expect(data.missionsAchieved).toBe(3);
   });
 });
+
+describe("progress copy names the lessons (parent request 2026-08-07)", () => {
+  const lesson = (id: string, eventId: string) =>
+    member({
+      eventId,
+      kind: "learning.lesson.completed",
+      payload: {
+        subject: { parentId: "par_1", childId: "chi_1", childName: "An" },
+        data: { courseId: "co1", lessonId: id, outcome: "achieved", durationS: 300 },
+      },
+    });
+
+  it("names the lesson that closed", () => {
+    const n = renderWindow([lesson("greet-1", "e1")], context);
+    expect(n.body).toBe("An hoàn thành 1 bài học (greet-1).");
+  });
+
+  it("lists several, in arrival order", () => {
+    const n = renderWindow([lesson("greet-1", "e1"), lesson("greet-2", "e2")], context);
+    expect(n.body).toContain("hoàn thành 2 bài học (greet-1, greet-2)");
+  });
+
+  it("stops listing after three — an FCM body spent on a list has none left for the point", () => {
+    const members = ["a", "b", "c", "d"].map((id, i) => lesson(id, `e${i}`));
+    const n = renderWindow(members, context);
+    expect(n.body).toContain("hoàn thành 4 bài học (a, b, c…)");
+  });
+
+  it("does not repeat a lesson id when the same lesson lands twice", () => {
+    const n = renderWindow([lesson("greet-1", "e1"), lesson("greet-1", "e2")], context);
+    expect(n.body).toContain("(greet-1)");
+    expect(n.body).not.toContain("greet-1, greet-1");
+  });
+
+  it("falls back to the bare count when the id is missing or malformed", () => {
+    // A renderer that throws takes the whole flush page down, and it runs on
+    // every window — so a contract violation degrades the copy, never the tick.
+    const broken = member({
+      payload: {
+        subject: { parentId: "par_1", childId: "chi_1", childName: "An" },
+        data: { courseId: "co1", outcome: "achieved", durationS: 300 },
+      },
+    });
+    expect(renderWindow([broken], context).body).toBe("An hoàn thành 1 bài học.");
+  });
+
+  it("keeps the ids in the payload for the app to deep-link with", () => {
+    const n = renderWindow([lesson("greet-1", "e1")], context);
+    expect(JSON.parse(n.dataJson).lessonIds).toEqual(["greet-1"]);
+  });
+});
