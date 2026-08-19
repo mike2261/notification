@@ -4,12 +4,9 @@
 //
 //   WIF_PRIVATE_KEY — PKCS#8 DER of the ES256 signing key, base64, one line.
 //                     Long-lived: WIF is not "keyless" (design.md §4.6).
-//   SKELETON_TOKEN  — bearer for POST /_skeleton/push. Walking skeleton only;
-//                     goes away with the route.
 //   E2E_TOKEN       — bearer for POST /v1/_test/emit (design.md §7.4). Only
 //                     meaningful while E2E_ENABLED is "1".
 interface Env {
   WIF_PRIVATE_KEY: string;
-  SKELETON_TOKEN?: string;
   E2E_TOKEN?: string;
 }
