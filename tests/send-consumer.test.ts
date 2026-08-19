@@ -314,8 +314,8 @@ describe("sendBatchJobs — gates at send time", () => {
   });
 });
 
-describe("PUSH_BROADCAST — demo prop, not a feature", () => {
-  it("off: a notification reaches only its OWN parent's devices", async () => {
+describe("token selection — who a notification actually reaches", () => {
+  it("a notification reaches only its OWN parent's devices", async () => {
     await seed({ notificationId: "n_own", parentId: "par_a", childId: "chi_a", tokens: ["tok_a"] });
     await seed({ notificationId: "n_other", parentId: "par_b", childId: "chi_b", tokens: ["tok_b"] });
     const { calls } = stubFcm(() => ({ status: 200, json: { name: "projects/x/messages/1" } }));
@@ -326,29 +326,7 @@ describe("PUSH_BROADCAST — demo prop, not a feature", () => {
     expect((calls[0] as { message: { token: string } }).message.token).toBe("tok_a");
   });
 
-  it("on: every enabled device receives it, whoever it was rendered for", async () => {
-    // The privacy trade this makes is the whole reason it is a temporary demo
-    // prop: par_a's child's progress lands on par_b's handset.
-    await seed({ notificationId: "n_bc", parentId: "par_a", childId: "chi_a", tokens: ["tok_a"] });
-    await seed({ notificationId: "n_other", parentId: "par_b", childId: "chi_b", tokens: ["tok_b"] });
-    const { calls } = stubFcm(() => ({ status: 200, json: { name: "projects/x/messages/1" } }));
-
-    await sendBatchJobs(sendEnv({ PUSH_BROADCAST: "1" }), [{ notificationId: "n_bc" }]);
-
-    const tokens = (calls as { message: { token: string } }[]).map((c) => c.message.token).sort();
-    expect(tokens).toEqual(["tok_a", "tok_b"]);
-  });
-
-  it("on: still respects PUSH_ENABLED — the dark gate outranks it", async () => {
-    await seed({ notificationId: "n_dark", parentId: "par_a", childId: "chi_a", tokens: ["tok_a"] });
-    const { calls } = stubFcm(() => ({ status: 200, json: { name: "projects/x/messages/1" } }));
-
-    await sendBatchJobs(sendEnv({ PUSH_BROADCAST: "1", PUSH_ENABLED: "0" }), [{ notificationId: "n_dark" }]);
-
-    expect(calls).toHaveLength(0);
-  });
-
-  it("on: a disabled token stays disabled — broadcast is not a resurrection", async () => {
+  it("a token already disabled is skipped at send time", async () => {
     await seed({ notificationId: "n_dis", parentId: "par_a", childId: "chi_a", tokens: ["tok_a"] });
     await getDb(env.NOTI_D1)
       .updateTable("push_tokens")
@@ -357,7 +335,7 @@ describe("PUSH_BROADCAST — demo prop, not a feature", () => {
       .execute();
     const { calls } = stubFcm(() => ({ status: 200, json: { name: "projects/x/messages/1" } }));
 
-    await sendBatchJobs(sendEnv({ PUSH_BROADCAST: "1" }), [{ notificationId: "n_dis" }]);
+    await sendBatchJobs(sendEnv(), [{ notificationId: "n_dis" }]);
 
     expect(calls).toHaveLength(0);
   });

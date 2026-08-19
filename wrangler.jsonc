@@ -116,17 +116,6 @@
 		// §7.4). Back to "0" once a push is confirmed on a handset, and it stays
 		// there through the dark period §8 asks for.
 		"PUSH_ENABLED": "1",
-		// DEMO PROP — delete with the login flow. The app is temporarily skipping
-		// sign-in, so no handset can register against a real parent (POST
-		// /v1/me/devices needs the parent JWT) and nothing would ever be
-		// delivered. "1" makes the send consumer ignore the parent match and
-		// deliver every notification to every enabled device.
-		//
-		// With real parents on the service this is a privacy incident, not a
-		// feature: one family's child's progress lands on every registered
-		// handset. It is safe TODAY only because push_tokens holds nothing but
-		// hand-inserted demo devices. PUSH_ENABLED still outranks it.
-		"PUSH_BROADCAST": "1",
 		// The e2e injection surface (design.md §7.4, src/routes/e2e.ts). Off by
 		// default: while it is "1", anyone holding E2E_TOKEN can fabricate
 		// progress moments for real parents. Flip it on for a verification run,

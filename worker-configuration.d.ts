@@ -18,7 +18,6 @@ interface __BaseEnv_Env {
 	PARENT_JWKS_URL: "https://robo-worker.test/auth/jwks" | "https://robo-worker.anhduc22601.workers.dev/auth/jwks";
 	PARENT_JWT_ISSUER: "https://robo-worker.test" | "https://robo-worker.anhduc22601.workers.dev";
 	PARENT_JWT_AUDIENCE: "robo-worker/parent";
-	PUSH_BROADCAST?: "1";
 	FLUSH_CHILD_QUIET_MS?: "30000";
 	FLUSH_CHILD_HARD_CAP_MS?: "120000";
 	FLUSH_PARENT_QUIET_MS?: "20000";
@@ -54,7 +53,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "WIF_ISSUER" | "WIF_SUBJECT" | "WIF_AUDIENCE" | "FCM_SA_EMAIL" | "FCM_PROJECT_ID" | "SKELETON_ENABLED" | "SKELETON_TOKEN" | "PUSH_ENABLED" | "E2E_ENABLED" | "E2E_TOKEN" | "PARENT_JWKS_URL" | "PARENT_JWT_ISSUER" | "PARENT_JWT_AUDIENCE" | "PUSH_BROADCAST" | "FLUSH_CHILD_QUIET_MS" | "FLUSH_CHILD_HARD_CAP_MS" | "FLUSH_PARENT_QUIET_MS" | "FLUSH_PARENT_HARD_CAP_MS">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "WIF_ISSUER" | "WIF_SUBJECT" | "WIF_AUDIENCE" | "FCM_SA_EMAIL" | "FCM_PROJECT_ID" | "SKELETON_ENABLED" | "SKELETON_TOKEN" | "PUSH_ENABLED" | "E2E_ENABLED" | "E2E_TOKEN" | "PARENT_JWKS_URL" | "PARENT_JWT_ISSUER" | "PARENT_JWT_AUDIENCE" | "FLUSH_CHILD_QUIET_MS" | "FLUSH_CHILD_HARD_CAP_MS" | "FLUSH_PARENT_QUIET_MS" | "FLUSH_PARENT_HARD_CAP_MS">> {}
 }
 
 // Begin runtime types
