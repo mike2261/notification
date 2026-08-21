@@ -27,6 +27,20 @@ const envelopeFields = {
 // deriveMissionOutcome() (robo-worker src/services/course/runtime/events.ts:454).
 const outcome = "'achieved'|'almost'|'practice_more'";
 
+// …or NULL, and only on `learning.lesson.completed`.
+//
+// A Can-do outcome describes a MISSION, and most lessons carry none: the real
+// pre-A1 curriculum has 45 lessons to 9 challenges, so four lessons in five end
+// with nothing to grade. Requiring the field meant those four produced no event
+// at all, and a parent whose child studied every evening heard from us once a
+// week. `null` says the honest thing — the lesson finished, there was no mission
+// in it — and keeps the field impossible to fake, which is why it is a null and
+// not a fifth enum member like 'none'.
+//
+// `learning.challenge.achieved` keeps a REQUIRED outcome by construction: that
+// event only exists when a mission was graded.
+const lessonOutcome = `${outcome}|null`;
+
 export const identityChildUpserted = type({
   ...envelopeFields,
   type: "'identity.child.upserted'",
@@ -52,7 +66,7 @@ export const identityParentDeleted = type({
 export const learningLessonCompleted = type({
   ...envelopeFields,
   type: "'learning.lesson.completed'",
-  data: { courseId: "string > 0", lessonId: "string > 0", outcome, durationS: "number" },
+  data: { courseId: "string > 0", lessonId: "string > 0", outcome: lessonOutcome, durationS: "number" },
 });
 
 export const learningChallengeAchieved = type({

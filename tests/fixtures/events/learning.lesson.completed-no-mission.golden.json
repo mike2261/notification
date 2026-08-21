@@ -1,0 +1,9 @@
+{
+  "specVersion": "1.0",
+  "eventId": "led_2:lesson_completed",
+  "type": "learning.lesson.completed",
+  "occurredAt": "2026-08-04T10:05:00Z",
+  "producer": "robo-worker",
+  "subject": { "parentId": "par_1", "childId": "chi_1", "childName": "An" },
+  "data": { "courseId": "c1", "lessonId": "l2", "outcome": null, "durationS": 240 }
+}
